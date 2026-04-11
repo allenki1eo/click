@@ -1,0 +1,57 @@
+{
+  "id": "zssf-contribution",
+  "name": "ZSSF Contribution Filing",
+  "name_sw": "Kujaza Michango ya ZSSF",
+  "portal": "https://www.zssf.go.tz",
+  "steps": [
+    {
+      "step": 1,
+      "title": "Login to ZSSF Employer Portal",
+      "title_sw": "Ingia kwenye Mfumo wa Mwajiri wa ZSSF",
+      "instruction": "Go to the ZSSF employer portal and log in with your employer registration number and password",
+      "instruction_sw": "Nenda kwenye mfumo wa mwajiri wa ZSSF na ingia ukitumia nambari yako ya usajili wa mwajiri na nenosiri",
+      "expected_screen": "ZSSF employer portal login page",
+      "success_indicator": "ZSSF employer dashboard loaded"
+    },
+    {
+      "step": 2,
+      "title": "Go to Contribution Submission",
+      "title_sw": "Nenda kwenye Uwasilishaji wa Michango",
+      "instruction": "On the employer dashboard, click on 'Contributions' then select 'Submit Monthly Contribution'",
+      "instruction_sw": "Kwenye dashibodi ya mwajiri, bonyeza 'Michango' kisha chagua 'Wasilisha Mchango wa Kila Mwezi'",
+      "expected_screen": "ZSSF employer dashboard with navigation menu",
+      "success_indicator": "Contribution submission form loaded",
+      "point_target": "Contributions menu"
+    },
+    {
+      "step": 3,
+      "title": "Upload Employee List",
+      "title_sw": "Pakia Orodha ya Wafanyakazi",
+      "instruction": "Download the contribution template, fill it with your employees' names, ZSSF numbers, and salaries, then upload the completed file",
+      "instruction_sw": "Pakua kielezo cha mchango, kijaze na majina ya wafanyakazi wako, nambari za ZSSF, na mishahara, kisha pakia faili iliyokamilika",
+      "expected_screen": "Contribution submission form with upload option",
+      "success_indicator": "Employee list uploaded and validated successfully",
+      "point_target": "Upload template button"
+    },
+    {
+      "step": 4,
+      "title": "Review and Confirm Contributions",
+      "title_sw": "Kagua na Thibitisha Michango",
+      "instruction": "Review the contribution summary showing total employees and total contribution amount, then click 'Confirm'",
+      "instruction_sw": "Kagua muhtasari wa mchango unaoonyesha jumla ya wafanyakazi na kiasi cha jumla cha mchango, kisha bonyeza 'Thibitisha'",
+      "expected_screen": "Contribution summary page with totals",
+      "success_indicator": "Contribution confirmed and payment invoice generated",
+      "point_target": "Confirm button"
+    },
+    {
+      "step": 5,
+      "title": "Pay Contributions",
+      "title_sw": "Lipa Michango",
+      "instruction": "Use the generated invoice number to make payment via your bank or mobile money. Upload the payment receipt to complete the process",
+      "instruction_sw": "Tumia nambari ya ankara iliyotengenezwa kufanya malipo kupitia benki yako au pesa za simu. Pakia risiti ya malipo kukamilisha mchakato",
+      "expected_screen": "Payment instructions page with invoice number",
+      "success_indicator": "Payment receipt uploaded and contributions marked as paid",
+      "point_target": "Upload receipt button"
+    }
+  ]
+}

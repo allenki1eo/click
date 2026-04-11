@@ -1,0 +1,16 @@
+name = "mwongozo-proxy"
+main = "src/index.ts"
+compatibility_date = "2024-01-01"
+
+[vars]
+# Non-secret config — safe to commit
+ELEVENLABS_VOICE_ID = "kPzsL2i3teMYv0FxEYQ6"
+APP_VERSION_MIN = "0.1.0"
+
+# Secrets — stored in Cloudflare dashboard, NOT committed:
+#   wrangler secret put OPENROUTER_API_KEY
+#   wrangler secret put ANTHROPIC_API_KEY
+#   wrangler secret put ELEVENLABS_API_KEY
+#   wrangler secret put ASSEMBLYAI_API_KEY
+#   wrangler secret put SUPABASE_URL
+#   wrangler secret put SUPABASE_SERVICE_ROLE_KEY

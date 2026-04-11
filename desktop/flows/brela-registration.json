@@ -1,0 +1,76 @@
+{
+  "id": "brela-registration",
+  "name": "BRELA Business Registration",
+  "name_sw": "Usajili wa Biashara - BRELA",
+  "portal": "https://ors.brela.go.tz",
+  "steps": [
+    {
+      "step": 1,
+      "title": "Open BRELA ORS Portal",
+      "title_sw": "Fungua Tovuti ya BRELA ORS",
+      "instruction": "Go to ors.brela.go.tz in your browser to access the Online Registration System",
+      "instruction_sw": "Nenda kwenye ors.brela.go.tz katika kivinjari chako kupata Mfumo wa Usajili wa Mtandaoni",
+      "expected_screen": "Browser with address bar",
+      "success_indicator": "BRELA ORS homepage loaded"
+    },
+    {
+      "step": 2,
+      "title": "Create Account or Login",
+      "title_sw": "Fungua Akaunti au Ingia",
+      "instruction": "If you are new, click 'Register' to create an account. If you already have an account, click 'Login'",
+      "instruction_sw": "Ikiwa wewe ni mpya, bonyeza 'Jisajili' kuunda akaunti. Ikiwa tayari una akaunti, bonyeza 'Ingia'",
+      "expected_screen": "BRELA ORS homepage with Register and Login buttons",
+      "success_indicator": "Logged in to BRELA ORS dashboard",
+      "point_target": "Register or Login button"
+    },
+    {
+      "step": 3,
+      "title": "Start New Business Registration",
+      "title_sw": "Anza Usajili Mpya wa Biashara",
+      "instruction": "On the dashboard, click 'New Registration' then select 'Business Name' for a sole trader or 'Company' for a limited company",
+      "instruction_sw": "Kwenye dashibodi, bonyeza 'Usajili Mpya' kisha chagua 'Jina la Biashara' kwa mfanyabiashara mmoja au 'Kampuni' kwa kampuni ndogo",
+      "expected_screen": "BRELA ORS dashboard",
+      "success_indicator": "Registration type selection page loaded",
+      "point_target": "New Registration button"
+    },
+    {
+      "step": 4,
+      "title": "Search Business Name Availability",
+      "title_sw": "Tafuta Upatikanaji wa Jina la Biashara",
+      "instruction": "Enter your proposed business name and click 'Search' to check if the name is available",
+      "instruction_sw": "Weka jina unalokusudia la biashara yako na bonyeza 'Tafuta' kuangalia kama jina linapatikana",
+      "expected_screen": "Business name search form",
+      "success_indicator": "Search results showing name availability status",
+      "point_target": "Business name search field"
+    },
+    {
+      "step": 5,
+      "title": "Fill Registration Form",
+      "title_sw": "Jaza Fomu ya Usajili",
+      "instruction": "Fill in all required fields: business owners/directors, address, nature of business, and share capital if applicable",
+      "instruction_sw": "Jaza sehemu zote zinazohitajika: wamiliki/wakurugenzi wa biashara, anwani, asili ya biashara, na mtaji wa hisa ikiwa inatumika",
+      "expected_screen": "Business registration form with multiple sections",
+      "success_indicator": "All required fields filled, form ready to submit"
+    },
+    {
+      "step": 6,
+      "title": "Pay Registration Fee",
+      "title_sw": "Lipa Ada ya Usajili",
+      "instruction": "Review the registration fee shown, then click 'Pay Now' and complete payment via mobile money or bank transfer",
+      "instruction_sw": "Kagua ada ya usajili iliyoonyeshwa, kisha bonyeza 'Lipa Sasa' na ukamilishe malipo kupitia pesa za simu au uhamisho wa benki",
+      "expected_screen": "Payment page with fee amount and payment options",
+      "success_indicator": "Payment confirmation received",
+      "point_target": "Pay Now button"
+    },
+    {
+      "step": 7,
+      "title": "Submit and Download Certificate",
+      "title_sw": "Tuma na Pakua Cheti",
+      "instruction": "After payment, click 'Submit Application'. Your registration certificate will be emailed and available to download from your dashboard",
+      "instruction_sw": "Baada ya malipo, bonyeza 'Tuma Maombi'. Cheti chako cha usajili kitatumwa kwa barua pepe na kitapatikana kupakuliwa kutoka kwenye dashibodi yako",
+      "expected_screen": "Payment confirmation page with Submit Application button",
+      "success_indicator": "Application submitted with reference number shown",
+      "point_target": "Submit Application button"
+    }
+  ]
+}

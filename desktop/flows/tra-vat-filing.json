@@ -1,0 +1,87 @@
+{
+  "id": "tra-vat-filing",
+  "name": "TRA VAT Filing",
+  "name_sw": "Kujaza Fomu ya VAT - TRA",
+  "portal": "https://uas.tra.go.tz",
+  "steps": [
+    {
+      "step": 1,
+      "title": "Open TRA IDARS Portal",
+      "title_sw": "Fungua Tovuti ya TRA IDARS",
+      "instruction": "Open your web browser and go to uas.tra.go.tz",
+      "instruction_sw": "Fungua kivinjari chako cha mtandao na nenda kwenye uas.tra.go.tz",
+      "expected_screen": "Web browser with address bar visible",
+      "success_indicator": "TRA IDARS login page loaded with TIN and password fields visible"
+    },
+    {
+      "step": 2,
+      "title": "Login to TRA IDARS",
+      "title_sw": "Ingia kwenye TRA IDARS",
+      "instruction": "Enter your TIN number in the first field and your password in the second field, then click 'Login'",
+      "instruction_sw": "Weka nambari yako ya TIN katika sehemu ya kwanza na nenosiri lako katika sehemu ya pili, kisha bonyeza 'Login'",
+      "expected_screen": "TRA login page with TIN and password fields",
+      "success_indicator": "TRA dashboard visible with taxpayer name shown",
+      "point_target": "Login button"
+    },
+    {
+      "step": 3,
+      "title": "Navigate to Returns Menu",
+      "title_sw": "Nenda kwenye Menyu ya Marejesho",
+      "instruction": "On the TRA dashboard, find and click the 'Returns' menu item in the top navigation bar",
+      "instruction_sw": "Kwenye dashibodi ya TRA, tafuta na ubonyeze kipengele cha menyu 'Returns' kwenye upau wa urambazaji wa juu",
+      "expected_screen": "TRA dashboard with navigation menu visible at top",
+      "success_indicator": "Returns submenu expanded showing VAT Return option",
+      "point_target": "Returns menu item"
+    },
+    {
+      "step": 4,
+      "title": "Select VAT Return",
+      "title_sw": "Chagua Marejesho ya VAT",
+      "instruction": "From the Returns dropdown menu, click on 'VAT Return'",
+      "instruction_sw": "Kutoka kwenye menyu ya chaguo la Marejesho, bonyeza 'VAT Return'",
+      "expected_screen": "Returns dropdown menu expanded",
+      "success_indicator": "VAT Return form or period selection page loaded",
+      "point_target": "VAT Return option"
+    },
+    {
+      "step": 5,
+      "title": "Select Filing Period",
+      "title_sw": "Chagua Kipindi cha Kujaza",
+      "instruction": "Select the tax period you are filing for (month and year), then click 'Proceed'",
+      "instruction_sw": "Chagua kipindi cha kodi unachojaza (mwezi na mwaka), kisha bonyeza 'Endelea'",
+      "expected_screen": "VAT Return period selection page with month/year dropdowns",
+      "success_indicator": "VAT Return entry form loaded with sales and purchases sections",
+      "point_target": "Period dropdown"
+    },
+    {
+      "step": 6,
+      "title": "Enter Sales Figures",
+      "title_sw": "Weka Takwimu za Mauzo",
+      "instruction": "In the Sales section, enter your total taxable sales for the period in the 'Taxable Sales' field",
+      "instruction_sw": "Katika sehemu ya Mauzo, weka jumla ya mauzo yako ya kikodi kwa kipindi hicho katika sehemu ya 'Mauzo ya Kikodi'",
+      "expected_screen": "VAT Return form with Sales section visible",
+      "success_indicator": "Sales figures entered and VAT calculated automatically",
+      "point_target": "Taxable Sales input field"
+    },
+    {
+      "step": 7,
+      "title": "Enter Purchases Figures",
+      "title_sw": "Weka Takwimu za Manunuzi",
+      "instruction": "In the Purchases section, enter your total taxable purchases and input VAT for the period",
+      "instruction_sw": "Katika sehemu ya Manunuzi, weka jumla ya manunuzi yako ya kikodi na VAT ya pembejeo kwa kipindi hicho",
+      "expected_screen": "VAT Return form with Purchases section visible",
+      "success_indicator": "Purchases figures entered and net VAT payable/refundable calculated",
+      "point_target": "Taxable Purchases input field"
+    },
+    {
+      "step": 8,
+      "title": "Review and Submit",
+      "title_sw": "Kagua na Tuma",
+      "instruction": "Review all figures carefully. If everything is correct, click 'Submit Return' to file your VAT return",
+      "instruction_sw": "Kagua takwimu zote kwa makini. Ikiwa kila kitu ni sahihi, bonyeza 'Tuma Marejesho' kutuma fomu yako ya VAT",
+      "expected_screen": "VAT Return summary page with all figures and Submit button",
+      "success_indicator": "Confirmation message shown with acknowledgement number",
+      "point_target": "Submit Return button"
+    }
+  ]
+}

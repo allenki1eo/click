@@ -1,0 +1,72 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Build outputs
+dist/
+dist-electron/
+out/
+build/
+release/
+
+# Electron builder
+desktop/dist/
+desktop/out/
+desktop/release/
+
+# Vite cache
+.vite/
+desktop/.vite/
+
+# TypeScript
+*.tsbuildinfo
+
+# Environment files — never commit secrets
+.env
+.env.local
+.env.*.local
+.dev.vars
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+*.log
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V7
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Electron packaged apps
+*.dmg
+*.exe
+*.AppImage
+*.snap
+*.deb
+*.rpm
+
+# Cloudflare Worker
+proxy/.wrangler/
+proxy/worker-configuration.d.ts
+
+# Test coverage
+coverage/
+
+# Supabase local
+.supabase/
+supabase/.temp/
+
+# App local data (org profile stored here at runtime)
+desktop/data/

@@ -1,0 +1,57 @@
+{
+  "id": "tra-paye",
+  "name": "TRA PAYE Filing",
+  "name_sw": "Kujaza Fomu ya PAYE - TRA",
+  "portal": "https://uas.tra.go.tz",
+  "steps": [
+    {
+      "step": 1,
+      "title": "Login to TRA IDARS",
+      "title_sw": "Ingia kwenye TRA IDARS",
+      "instruction": "Go to uas.tra.go.tz and log in with your employer TIN and password",
+      "instruction_sw": "Nenda kwenye uas.tra.go.tz na ingia ukitumia TIN yako ya mwajiri na nenosiri",
+      "expected_screen": "TRA IDARS login page",
+      "success_indicator": "TRA dashboard visible"
+    },
+    {
+      "step": 2,
+      "title": "Go to Employment Returns",
+      "title_sw": "Nenda kwenye Marejesho ya Ajira",
+      "instruction": "Click on 'Returns' in the navigation menu, then select 'Employment Returns'",
+      "instruction_sw": "Bonyeza 'Returns' kwenye menyu ya urambazaji, kisha chagua 'Marejesho ya Ajira'",
+      "expected_screen": "TRA dashboard with navigation visible",
+      "success_indicator": "Employment Returns submenu visible",
+      "point_target": "Returns menu"
+    },
+    {
+      "step": 3,
+      "title": "Select PAYE Return",
+      "title_sw": "Chagua Marejesho ya PAYE",
+      "instruction": "From the Employment Returns submenu, click on 'PAYE Return'",
+      "instruction_sw": "Kutoka kwenye menyu ndogo ya Marejesho ya Ajira, bonyeza 'Marejesho ya PAYE'",
+      "expected_screen": "Employment Returns submenu expanded",
+      "success_indicator": "PAYE Return form or period selection loaded",
+      "point_target": "PAYE Return"
+    },
+    {
+      "step": 4,
+      "title": "Select Period and Enter Employees",
+      "title_sw": "Chagua Kipindi na Weka Watumishi",
+      "instruction": "Select the tax month, then enter the number of employees and total gross salary paid",
+      "instruction_sw": "Chagua mwezi wa kodi, kisha weka idadi ya watumishi na jumla ya mshahara mkubwa uliolipwa",
+      "expected_screen": "PAYE Return entry form",
+      "success_indicator": "PAYE amount calculated automatically",
+      "point_target": "Tax month dropdown"
+    },
+    {
+      "step": 5,
+      "title": "Submit PAYE Return",
+      "title_sw": "Tuma Marejesho ya PAYE",
+      "instruction": "Review the calculated PAYE amount, then click 'Submit' to file the return",
+      "instruction_sw": "Kagua kiasi cha PAYE kilichohesabiwa, kisha bonyeza 'Tuma' kutuma marejesho",
+      "expected_screen": "PAYE Return summary with calculated amounts",
+      "success_indicator": "PAYE return submitted with acknowledgement number shown",
+      "point_target": "Submit button"
+    }
+  ]
+}

@@ -1,0 +1,57 @@
+{
+  "id": "nhif-registration",
+  "name": "NHIF Employee Registration",
+  "name_sw": "Usajili wa Wafanyakazi kwenye NHIF",
+  "portal": "https://www.nhif.or.tz",
+  "steps": [
+    {
+      "step": 1,
+      "title": "Login to NHIF Employer Portal",
+      "title_sw": "Ingia kwenye Mfumo wa Mwajiri wa NHIF",
+      "instruction": "Go to the NHIF online portal and log in with your employer number and PIN",
+      "instruction_sw": "Nenda kwenye tovuti ya NHIF ya mtandaoni na ingia ukitumia nambari yako ya mwajiri na PIN",
+      "expected_screen": "NHIF login page",
+      "success_indicator": "NHIF employer dashboard loaded"
+    },
+    {
+      "step": 2,
+      "title": "Go to Member Registration",
+      "title_sw": "Nenda kwenye Usajili wa Mwanachama",
+      "instruction": "On the employer dashboard, click 'Member Management' then select 'Register New Member'",
+      "instruction_sw": "Kwenye dashibodi ya mwajiri, bonyeza 'Usimamizi wa Wanachama' kisha chagua 'Sajili Mwanachama Mpya'",
+      "expected_screen": "NHIF employer dashboard",
+      "success_indicator": "New member registration form loaded",
+      "point_target": "Member Management menu"
+    },
+    {
+      "step": 3,
+      "title": "Enter Employee Details",
+      "title_sw": "Weka Maelezo ya Mfanyakazi",
+      "instruction": "Fill in the employee's full name, date of birth, National ID number, and employment date",
+      "instruction_sw": "Jaza jina kamili la mfanyakazi, tarehe ya kuzaliwa, nambari ya Kitambulisho cha Taifa, na tarehe ya kuajiriwa",
+      "expected_screen": "New member registration form with personal details fields",
+      "success_indicator": "Employee details entered correctly",
+      "point_target": "Full name input field"
+    },
+    {
+      "step": 4,
+      "title": "Add Beneficiaries",
+      "title_sw": "Ongeza Wategemezi",
+      "instruction": "Add the employee's dependants (spouse and children under 18). Click 'Add Beneficiary' for each one",
+      "instruction_sw": "Ongeza wategemezi wa mfanyakazi (mwenzi na watoto walio chini ya miaka 18). Bonyeza 'Ongeza Mtegemezi' kwa kila mmoja",
+      "expected_screen": "Beneficiary section of the registration form",
+      "success_indicator": "All beneficiaries added to the form",
+      "point_target": "Add Beneficiary button"
+    },
+    {
+      "step": 5,
+      "title": "Submit Registration",
+      "title_sw": "Tuma Usajili",
+      "instruction": "Review all the information, then click 'Submit' to register the employee with NHIF",
+      "instruction_sw": "Kagua taarifa zote, kisha bonyeza 'Tuma' kusajili mfanyakazi na NHIF",
+      "expected_screen": "Registration summary with all entered details",
+      "success_indicator": "NHIF membership number generated and shown for the new member",
+      "point_target": "Submit button"
+    }
+  ]
+}
