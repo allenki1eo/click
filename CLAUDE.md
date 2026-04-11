@@ -67,7 +67,7 @@ Windows, macOS, and Linux from one codebase.
 |---|---|---|
 | Screen vision + guidance | **Qwen2.5-VL** via OpenRouter | Claude claude-sonnet-4-20250514 |
 | Voice transcription | **Whisper** (local, `whisper.cpp`) | AssemblyAI |
-| Text-to-speech | **Kokoro TTS** (local, free) | ElevenLabs |
+| Text-to-speech | **edge-tts** (free, `sw-TZ-DaudiNeural`) → **Piper TTS** (self-hosted) → Web Speech API | ~~ElevenLabs~~ (removed) |
 | Embeddings / search | **nomic-embed-text** (Ollama) | OpenAI |
 
 > **Why Qwen2.5-VL?** It is currently one of the strongest open-weight vision models

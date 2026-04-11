@@ -9,14 +9,16 @@
  * Routes:
  *   POST /vision/qwen     → OpenRouter Qwen2.5-VL (primary, free)
  *   POST /vision/claude   → Anthropic Claude Sonnet (fallback, accurate)
- *   POST /tts             → Kokoro or ElevenLabs TTS
+ *   POST /tts             → edge-tts (primary, free) or Piper TTS (secondary)
  *   POST /transcribe      → Whisper transcription
  *   POST /transcribe-token → AssemblyAI short-lived token (legacy fallback)
  *   POST /activate-code   → Validate org code via Supabase, return OrgProfile
  *   POST /session/log     → Log session analytics to Supabase
  *
- * CORS: requests only accepted from the Electron app (no Origin header)
- * or from the dashboard domain.
+ * TTS provider chain (no API key required for any of these):
+ *   1. edge-tts  — Microsoft Edge neural TTS via WebSocket (free, sw-TZ-DaudiNeural)
+ *   2. Piper TTS — Open-source self-hosted server (set PIPER_TTS_URL secret)
+ *   ElevenLabs removed — API keys are unreliable and expensive.
  */
 
 interface Env {
@@ -24,9 +26,9 @@ interface Env {
   OPENROUTER_API_KEY: string
   ANTHROPIC_API_KEY: string
 
-  // TTS
-  ELEVENLABS_API_KEY: string
-  ELEVENLABS_VOICE_ID: string
+  // TTS — no keys needed for edge-tts or Piper, but Piper needs a server URL
+  /** URL of your self-hosted Piper TTS HTTP server, e.g. https://piper.example.com */
+  PIPER_TTS_URL: string
 
   // Transcription
   ASSEMBLYAI_API_KEY: string
@@ -169,93 +171,198 @@ async function handleClaudeVision(request: Request, env: Env): Promise<Response>
 }
 
 // ---------------------------------------------------------------------------
-// TTS: Kokoro (primary) or ElevenLabs (fallback)
+// TTS: edge-tts (primary, free) → Piper TTS (secondary, self-hosted)
+// ElevenLabs removed — API keys are unreliable, and these options are free.
 // ---------------------------------------------------------------------------
 
 async function handleTts(request: Request, env: Env): Promise<Response> {
   const body = await request.json() as {
-    provider?: 'kokoro' | 'elevenlabs'
+    provider?: 'edge' | 'piper'
     text: string
-    language?: string
     voice?: string
-    model_id?: string
-    voice_settings?: object
+    language?: string
   }
 
-  const provider = body.provider ?? 'kokoro'
+  // Default to edge-tts (requires no secret at all)
+  const provider = body.provider ?? 'edge'
 
-  if (provider === 'kokoro') {
-    return await handleKokoroTts(body.text, body.language ?? 'sw', body.voice ?? 'af_sarah', env)
+  if (provider === 'edge') {
+    return await handleEdgeTts(body.text, body.voice ?? 'sw-TZ-DaudiNeural')
   }
 
-  // ElevenLabs (from clicky's original handleTTS)
-  return await handleElevenLabsTts(body, env)
+  if (provider === 'piper') {
+    return await handlePiperTts(body.text, body.voice ?? 'sw_CD-akashic-medium', env)
+  }
+
+  return corsResponse('Unknown TTS provider', { status: 400 })
 }
 
-async function handleKokoroTts(
-  text: string,
-  language: string,
-  voice: string,
-  env: Env
-): Promise<Response> {
-  // Kokoro TTS — self-hosted or via a compatible endpoint
-  // For Phase 1, we use the public Kokoro API demo endpoint.
-  // TODO: Deploy a dedicated Kokoro instance for production reliability.
-  const response = await fetch('https://api.kokorotts.com/v1/audio/speech', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify({
-      model: 'kokoro',
-      input: text,
-      voice,
-      response_format: 'mp3',
-      speed: 1.0
-    })
-  })
+// ---------------------------------------------------------------------------
+// edge-tts: Microsoft Edge neural TTS via WebSocket
+//
+// Uses the same endpoint as the Microsoft Edge browser's read-aloud feature.
+// No API key required — it's a public endpoint with a static trusted token.
+//
+// Voices with Swahili support:
+//   sw-TZ-DaudiNeural   — Tanzanian Swahili, male   ✅ recommended
+//   sw-KE-ZuriNeural    — Kenyan Swahili, female
+//   sw-TZ-RehemaNeural  — Tanzanian Swahili, female
+//
+// Reference: https://github.com/rany2/edge-tts (MIT License)
+// ---------------------------------------------------------------------------
 
-  if (!response.ok) {
-    // Silently fall through to ElevenLabs by returning non-200
-    const errorBody = await response.text()
-    console.warn(`[/tts] Kokoro error ${response.status} — will fall back client-side: ${errorBody}`)
-    return corsResponse(errorBody, {
-      status: response.status,
-      headers: { 'content-type': 'application/json' }
-    })
-  }
+const EDGE_TTS_TRUSTED_TOKEN = '6A5AA1D4EAFF4E9FB37E23D68491D6F4'
+const EDGE_TTS_WS_BASE = 'wss://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v1'
 
-  return corsResponse(response.body, {
-    status: 200,
-    headers: { 'content-type': 'audio/mpeg' }
+function generateUuid(): string {
+  // Simple UUID v4 without crypto dependency
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0
+    return (c === 'x' ? r : (r & 0x3) | 0x8).toString(16)
   })
 }
 
-async function handleElevenLabsTts(
-  body: { text: string; model_id?: string; voice_settings?: object },
-  env: Env
-): Promise<Response> {
-  const voiceId = env.ELEVENLABS_VOICE_ID
-  const response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`, {
-    method: 'POST',
-    headers: {
-      'xi-api-key': env.ELEVENLABS_API_KEY,
-      'content-type': 'application/json',
-      accept: 'audio/mpeg'
-    },
-    body: JSON.stringify({
-      text: body.text,
-      model_id: body.model_id ?? 'eleven_multilingual_v2',
-      voice_settings: body.voice_settings ?? { stability: 0.5, similarity_boost: 0.75 }
+function buildSsml(text: string, voice: string): string {
+  // Derive lang from voice name, e.g. sw-TZ-DaudiNeural → sw-TZ
+  const lang = voice.split('-').slice(0, 2).join('-')
+  // Escape XML special chars
+  const escaped = text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+  return (
+    `<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='${lang}'>` +
+    `<voice name='${voice}'>${escaped}</voice></speak>`
+  )
+}
+
+async function handleEdgeTts(text: string, voice: string): Promise<Response> {
+  const connectionId = generateUuid().replace(/-/g, '')
+  const wsUrl = `${EDGE_TTS_WS_BASE}?TrustedClientToken=${EDGE_TTS_TRUSTED_TOKEN}&ConnectionId=${connectionId}`
+
+  return new Promise<Response>((resolve, reject) => {
+    const ws = new WebSocket(wsUrl)
+    const audioChunks: Uint8Array[] = []
+
+    ws.addEventListener('open', () => {
+      const timestamp = new Date().toISOString()
+
+      // Message 1: audio format config
+      ws.send(
+        `X-Timestamp:${timestamp}\r\n` +
+        `Content-Type:application/json; charset=utf-8\r\n` +
+        `Path:speech.config\r\n\r\n` +
+        JSON.stringify({
+          context: {
+            synthesis: {
+              audio: {
+                metadataoptions: { sentenceBoundaryEnabled: 'false', wordBoundaryEnabled: 'true' },
+                // 24kHz 48kbps mono MP3 — good quality, small file size
+                outputFormat: 'audio-24khz-48kbitrate-mono-mp3'
+              }
+            }
+          }
+        })
+      )
+
+      // Message 2: SSML with the text to speak
+      const requestId = generateUuid().replace(/-/g, '')
+      ws.send(
+        `X-RequestId:${requestId}\r\n` +
+        `Content-Type:application/ssml+xml\r\n` +
+        `X-Timestamp:${timestamp}\r\n` +
+        `Path:ssml\r\n\r\n` +
+        buildSsml(text, voice)
+      )
     })
+
+    ws.addEventListener('message', (event: MessageEvent) => {
+      if (event.data instanceof ArrayBuffer) {
+        // Binary frame: [uint16 header-length][text header][MP3 audio data]
+        const view = new DataView(event.data)
+        const headerLen = view.getUint16(0)          // first 2 bytes = header length
+        const headerText = new TextDecoder().decode(
+          new Uint8Array(event.data, 2, headerLen)
+        )
+
+        if (headerText.includes('Path:audio')) {
+          // Everything after the header is MP3 audio
+          const audioData = new Uint8Array(event.data, 2 + headerLen)
+          if (audioData.byteLength > 0) {
+            audioChunks.push(audioData)
+          }
+        }
+      } else if (typeof event.data === 'string') {
+        if (event.data.includes('Path:turn.end')) {
+          // Synthesis complete — assemble all chunks and return
+          ws.close()
+
+          if (audioChunks.length === 0) {
+            reject(new Error('edge-tts: no audio chunks received'))
+            return
+          }
+
+          const totalBytes = audioChunks.reduce((n, c) => n + c.byteLength, 0)
+          const combined = new Uint8Array(totalBytes)
+          let offset = 0
+          for (const chunk of audioChunks) {
+            combined.set(chunk, offset)
+            offset += chunk.byteLength
+          }
+
+          resolve(corsResponse(combined.buffer, {
+            status: 200,
+            headers: { 'content-type': 'audio/mpeg' }
+          }))
+        }
+      }
+    })
+
+    ws.addEventListener('error', (err: Event) => {
+      reject(new Error(`edge-tts WebSocket error: ${String(err)}`))
+    })
+
+    ws.addEventListener('close', (event: CloseEvent) => {
+      if (!event.wasClean && audioChunks.length === 0) {
+        reject(new Error(`edge-tts WebSocket closed unexpectedly (code ${event.code})`))
+      }
+    })
+
+    // Safety timeout — edge-tts should respond in <10s for short text
+    setTimeout(() => {
+      if (ws.readyState !== WebSocket.CLOSED) ws.close()
+      if (audioChunks.length === 0) {
+        reject(new Error('edge-tts timed out'))
+      }
+    }, 12_000)
+  })
+}
+
+// ---------------------------------------------------------------------------
+// Piper TTS: open-source, self-hostable
+//
+// Deploy Piper as an HTTP server:
+//   docker run -it -p 5000:5000 rhasspy/piper --voice sw_CD-akashic-medium
+// Set PIPER_TTS_URL secret to e.g. https://your-piper-server.railway.app
+//
+// Piper Swahili model: sw_CD-akashic-medium (DRC Swahili, close to Tanzanian)
+// Download: https://huggingface.co/rhasspy/piper-voices/tree/main/sw/sw_CD
+// ---------------------------------------------------------------------------
+
+async function handlePiperTts(text: string, voice: string, env: Env): Promise<Response> {
+  if (!env.PIPER_TTS_URL) {
+    throw new Error('PIPER_TTS_URL secret not configured')
+  }
+
+  const response = await fetch(`${env.PIPER_TTS_URL}/synthesize`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text, voice, output_format: 'mp3' })
   })
 
   if (!response.ok) {
-    const errorBody = await response.text()
-    return corsResponse(errorBody, {
-      status: response.status,
-      headers: { 'content-type': 'application/json' }
-    })
+    throw new Error(`Piper TTS error ${response.status}: ${await response.text()}`)
   }
 
   return corsResponse(response.body, {

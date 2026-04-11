@@ -4,13 +4,23 @@ compatibility_date = "2024-01-01"
 
 [vars]
 # Non-secret config — safe to commit
-ELEVENLABS_VOICE_ID = "kPzsL2i3teMYv0FxEYQ6"
 APP_VERSION_MIN = "0.1.0"
 
-# Secrets — stored in Cloudflare dashboard, NOT committed:
-#   wrangler secret put OPENROUTER_API_KEY
-#   wrangler secret put ANTHROPIC_API_KEY
-#   wrangler secret put ELEVENLABS_API_KEY
-#   wrangler secret put ASSEMBLYAI_API_KEY
-#   wrangler secret put SUPABASE_URL
-#   wrangler secret put SUPABASE_SERVICE_ROLE_KEY
+# Secrets — stored in Cloudflare dashboard, NOT committed.
+# Run: wrangler secret put <NAME>
+#
+# Required:
+#   ANTHROPIC_API_KEY       — Claude vision fallback
+#   OPENROUTER_API_KEY      — Qwen2.5-VL vision (primary)
+#   ASSEMBLYAI_API_KEY      — transcription
+#   SUPABASE_URL            — multi-tenant backend
+#   SUPABASE_SERVICE_ROLE_KEY
+#
+# Optional (TTS):
+#   PIPER_TTS_URL           — URL of self-hosted Piper TTS server
+#                             e.g. https://piper.yourdomain.com
+#                             Deploy: docker run -p 5000:5000 rhasspy/piper
+#                             If not set, edge-tts is used (no key needed).
+#
+# Removed:
+#   ELEVENLABS_API_KEY      — removed; edge-tts is free and has Swahili voices

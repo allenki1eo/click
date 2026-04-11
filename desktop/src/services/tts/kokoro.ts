@@ -1,21 +1,22 @@
 /**
- * Text-to-speech service — Kokoro TTS (local) primary, ElevenLabs fallback.
+ * Text-to-speech service.
  *
  * Ported from ElevenLabsTTSClient.swift (Clicky).
+ * ElevenLabs removed — replaced with free/open-source alternatives.
  *
- * Phase 1 implementation:
- *  - Primary: Kokoro TTS via proxy (POST /tts)
- *    The proxy runs Kokoro server-side and returns audio/mpeg
- *  - Fallback: ElevenLabs (existing proxy route from Clicky)
+ * Provider chain (tried in order):
+ *  1. edge-tts  — Microsoft Edge neural voices via proxy WebSocket relay.
+ *                 No API key required. Has sw-TZ-DaudiNeural (Tanzanian Swahili).
+ *  2. Piper TTS — Open-source, self-hostable, offline-capable.
+ *                 Good Swahili model: sw_CD-akashic-medium.
+ *  3. Web Speech API — Built into Windows/browser, zero server deps.
+ *                 Used as emergency fallback when proxy is unreachable.
  *
- * Audio playback uses the Web Audio API via the main process → renderer IPC.
- * We cannot play audio directly from the main process (no Web Audio there),
- * so we send the audio buffer to the panel renderer for playback.
- *
- * Phase 2 TODO: Bundle kokoro.cpp as a native addon for fully offline TTS.
+ * Audio playback uses the Web Audio API in the panel renderer — main process
+ * has no audio context, so we IPC the MP3 buffer to the renderer to play.
  */
 
-import { BrowserWindow } from 'electron'
+import { BrowserWindow, ipcMain } from 'electron'
 
 let proxyUrl = 'https://mwongozo-proxy.workers.dev'
 let panelWindowRef: BrowserWindow | null = null
@@ -28,117 +29,162 @@ export function setTtsPanelWindow(win: BrowserWindow): void {
   panelWindowRef = win
 }
 
+// ---------------------------------------------------------------------------
+// Voice map — best available per language
+// ---------------------------------------------------------------------------
+
+const VOICES: Record<'sw' | 'en', { edge: string; piper: string }> = {
+  sw: {
+    // Tanzanian Swahili neural voice (male) — DaudiNeural sounds the most natural
+    // Alternative: sw-KE-ZuriNeural (Kenyan Swahili, female)
+    edge: 'sw-TZ-DaudiNeural',
+    piper: 'sw_CD-akashic-medium'
+  },
+  en: {
+    edge: 'en-GB-SoniaNeural',
+    piper: 'en_US-lessac-medium'
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Public API
+// ---------------------------------------------------------------------------
+
 /**
  * Speak the given text aloud using TTS.
- * Blocks until TTS audio has finished playing.
+ * Tries providers in order until one succeeds.
  */
 export async function speak(text: string, language: 'sw' | 'en' = 'sw'): Promise<void> {
   if (!text.trim()) return
 
-  let audioBuffer: Buffer | null = null
+  const cleanText = stripMarkdown(text)
 
-  // Try Kokoro first
+  // 1. Try edge-tts via proxy
   try {
-    audioBuffer = await fetchKokoroAudio(text, language)
-    console.info('[tts] Kokoro audio fetched')
+    const audioBuffer = await fetchEdgeTtsAudio(cleanText, language)
+    await playAudioInRenderer(audioBuffer)
+    return
   } catch (err) {
-    console.warn('[tts] Kokoro failed, trying ElevenLabs:', err)
+    console.warn('[tts] edge-tts failed, trying Piper:', (err as Error).message)
   }
 
-  // Fall back to ElevenLabs
-  if (!audioBuffer) {
-    try {
-      audioBuffer = await fetchElevenLabsAudio(text)
-      console.info('[tts] ElevenLabs audio fetched')
-    } catch (err) {
-      console.error('[tts] All TTS providers failed:', err)
-      return
-    }
+  // 2. Try Piper TTS via proxy
+  try {
+    const audioBuffer = await fetchPiperAudio(cleanText, language)
+    await playAudioInRenderer(audioBuffer)
+    return
+  } catch (err) {
+    console.warn('[tts] Piper failed, falling back to Web Speech API:', (err as Error).message)
   }
 
-  // Send audio to the panel renderer for playback
-  await playAudioInRenderer(audioBuffer)
+  // 3. Web Speech API fallback — tell renderer to speak locally
+  await speakViaWebSpeechApi(cleanText, language)
 }
 
 // ---------------------------------------------------------------------------
-// Kokoro TTS
+// Provider 1: edge-tts (free, no key, great Swahili voices)
 // ---------------------------------------------------------------------------
 
-async function fetchKokoroAudio(text: string, language: 'sw' | 'en'): Promise<Buffer> {
+async function fetchEdgeTtsAudio(text: string, language: 'sw' | 'en'): Promise<Buffer> {
+  const voice = VOICES[language].edge
   const response = await fetch(`${proxyUrl}/tts`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      provider: 'kokoro',
-      text,
-      language,
-      // Swahili-accented voice for authenticity
-      voice: language === 'sw' ? 'af_sarah' : 'af_sky',
-      speed: 1.0
-    })
+    body: JSON.stringify({ provider: 'edge', text, voice, language }),
+    // Keep timeout reasonable — edge-tts WebSocket relay takes ~2-4s
+    signal: AbortSignal.timeout(15_000)
   })
 
   if (!response.ok) {
-    throw new Error(`Kokoro TTS error ${response.status}: ${await response.text()}`)
+    throw new Error(`edge-tts proxy error ${response.status}: ${await response.text()}`)
   }
 
   const arrayBuffer = await response.arrayBuffer()
+  if (arrayBuffer.byteLength === 0) {
+    throw new Error('edge-tts returned empty audio')
+  }
   return Buffer.from(arrayBuffer)
 }
 
 // ---------------------------------------------------------------------------
-// ElevenLabs fallback
+// Provider 2: Piper TTS (open-source, self-hostable)
 // ---------------------------------------------------------------------------
 
-async function fetchElevenLabsAudio(text: string): Promise<Buffer> {
+async function fetchPiperAudio(text: string, language: 'sw' | 'en'): Promise<Buffer> {
+  const voice = VOICES[language].piper
   const response = await fetch(`${proxyUrl}/tts`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      provider: 'elevenlabs',
-      text,
-      model_id: 'eleven_multilingual_v2',
-      voice_settings: { stability: 0.5, similarity_boost: 0.75 }
-    })
+    body: JSON.stringify({ provider: 'piper', text, voice }),
+    signal: AbortSignal.timeout(15_000)
   })
 
   if (!response.ok) {
-    throw new Error(`ElevenLabs TTS error ${response.status}: ${await response.text()}`)
+    throw new Error(`Piper TTS proxy error ${response.status}: ${await response.text()}`)
   }
 
   const arrayBuffer = await response.arrayBuffer()
+  if (arrayBuffer.byteLength === 0) {
+    throw new Error('Piper returned empty audio')
+  }
   return Buffer.from(arrayBuffer)
 }
 
 // ---------------------------------------------------------------------------
-// Audio playback via renderer (panel window)
+// Provider 3: Web Speech API (renderer-side, zero deps, always available)
 // ---------------------------------------------------------------------------
 
 /**
- * Send the audio buffer to the panel window renderer for Web Audio playback.
- * Returns a Promise that resolves when playback is complete.
+ * Send an IPC message to the panel renderer asking it to use the browser's
+ * built-in speech synthesis. On Windows 10/11 this uses Microsoft neural voices.
  */
+async function speakViaWebSpeechApi(text: string, language: 'sw' | 'en'): Promise<void> {
+  if (!panelWindowRef || panelWindowRef.isDestroyed()) {
+    console.error('[tts] No panel window for Web Speech API fallback')
+    return
+  }
+
+  return new Promise((resolve) => {
+    const timeout = setTimeout(resolve, 30_000)
+    panelWindowRef!.webContents.send('TTS:WEB_SPEECH', { text, language })
+    ipcMain.once('TTS:WEB_SPEECH_DONE', () => {
+      clearTimeout(timeout)
+      resolve()
+    })
+  })
+}
+
+// ---------------------------------------------------------------------------
+// Audio playback via renderer
+// ---------------------------------------------------------------------------
+
 async function playAudioInRenderer(audioBuffer: Buffer): Promise<void> {
   if (!panelWindowRef || panelWindowRef.isDestroyed()) {
-    console.warn('[tts] Panel window not available for audio playback')
+    console.warn('[tts] Panel window unavailable for audio playback')
     return
   }
 
   return new Promise((resolve) => {
     const base64Audio = audioBuffer.toString('base64')
-
-    // Send audio to renderer; renderer replies via IPC when done
-    panelWindowRef!.webContents.send('TTS:PLAY_AUDIO', base64Audio)
-
-    // Timeout safety net — resolve after 30s max even if renderer doesn't reply
     const timeout = setTimeout(resolve, 30_000)
-
-    // Listen for renderer's "I'm done playing" reply
-    const { ipcMain } = require('electron')
-    const cleanup = (): void => {
+    panelWindowRef!.webContents.send('TTS:PLAY_AUDIO', base64Audio)
+    ipcMain.once('TTS:AUDIO_DONE', () => {
       clearTimeout(timeout)
       resolve()
-    }
-    ipcMain.once('TTS:AUDIO_DONE', cleanup)
+    })
   })
+}
+
+// ---------------------------------------------------------------------------
+// Utility: strip markdown formatting before speaking
+// ---------------------------------------------------------------------------
+
+function stripMarkdown(text: string): string {
+  return text
+    .replace(/\*\*(.+?)\*\*/g, '$1')   // bold
+    .replace(/\*(.+?)\*/g, '$1')        // italic
+    .replace(/`(.+?)`/g, '$1')          // inline code
+    .replace(/#+\s/g, '')               // headings
+    .replace(/\[(.+?)\]\(.+?\)/g, '$1') // links → label only
+    .trim()
 }

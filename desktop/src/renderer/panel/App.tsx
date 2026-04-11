@@ -178,14 +178,21 @@ export function PanelApp(): React.ReactElement {
       stopMicCapture()
     })
 
-    // Handle TTS audio playback in this window
+    // Handle TTS audio playback (edge-tts / Piper path — main sends MP3 buffer)
     const handlePlayAudio = (_: unknown, base64Audio: string): void => {
       playBase64Audio(base64Audio).then(() => {
-        // Notify main process that playback finished
         window.ipcRenderer?.send('TTS:AUDIO_DONE')
       })
     }
     window.ipcRenderer?.on('TTS:PLAY_AUDIO', handlePlayAudio)
+
+    // Handle Web Speech API fallback (used when proxy is unreachable)
+    const handleWebSpeech = (_: unknown, payload: { text: string; language: string }): void => {
+      speakViaWebSpeechAPI(payload.text, payload.language).then(() => {
+        window.ipcRenderer?.send('TTS:WEB_SPEECH_DONE')
+      })
+    }
+    window.ipcRenderer?.on('TTS:WEB_SPEECH', handleWebSpeech)
 
     return () => {
       unsubState()
@@ -194,6 +201,7 @@ export function PanelApp(): React.ReactElement {
       unsubPress()
       unsubRelease()
       window.ipcRenderer?.removeListener('TTS:PLAY_AUDIO', handlePlayAudio)
+      window.ipcRenderer?.removeListener('TTS:WEB_SPEECH', handleWebSpeech)
     }
   }, [])
 
@@ -267,6 +275,40 @@ export function PanelApp(): React.ReactElement {
     return new Promise((resolve) => {
       source.onended = () => resolve()
       source.start()
+    })
+  }
+
+  /**
+   * Web Speech API fallback — uses the OS built-in TTS engine.
+   * On Windows 10/11, this defaults to Microsoft neural voices.
+   * Swahili availability depends on installed language packs, but the
+   * sw-TZ / sw-KE voices are pre-installed on most Windows 11 systems.
+   */
+  async function speakViaWebSpeechAPI(text: string, language: string): Promise<void> {
+    return new Promise((resolve) => {
+      if (!window.speechSynthesis) {
+        resolve()
+        return
+      }
+
+      window.speechSynthesis.cancel()
+      const utterance = new SpeechSynthesisUtterance(text)
+      utterance.lang = language === 'sw' ? 'sw-TZ' : 'en-GB'
+      utterance.rate = 0.95
+      utterance.pitch = 1.0
+
+      // Try to find the best available voice for Swahili
+      const voices = window.speechSynthesis.getVoices()
+      const swahiliVoice = voices.find((v) =>
+        v.lang.startsWith('sw') || v.name.toLowerCase().includes('daudi')
+      )
+      if (swahiliVoice && language === 'sw') {
+        utterance.voice = swahiliVoice
+      }
+
+      utterance.onend = () => resolve()
+      utterance.onerror = () => resolve()
+      window.speechSynthesis.speak(utterance)
     })
   }
 
