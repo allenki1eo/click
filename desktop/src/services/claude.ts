@@ -314,7 +314,7 @@ export async function streamGuidance(opts: {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       model: 'meta-llama/llama-3.2-11b-vision-instruct:free',
-      max_tokens: 1024,
+      max_tokens: 600,
       stream: true,
       messages,
     }),
