@@ -7,7 +7,7 @@
  * binary never contains any keys — it only knows the proxy URL.
  *
  * Routes:
- *   POST /vision/qwen     → OpenRouter Qwen2.5-VL (primary, free)
+ *   POST /vision/qwen     → HuggingFace Inference API — Qwen2.5-VL-7B (primary, free)
  *   POST /vision/claude   → Anthropic Claude Sonnet (fallback, accurate)
  *   POST /tts             → edge-tts (primary, free) or Piper TTS (secondary)
  *   POST /transcribe      → Whisper transcription
@@ -15,15 +15,19 @@
  *   POST /activate-code   → Validate org code via Supabase, return OrgProfile
  *   POST /session/log     → Log session analytics to Supabase
  *
+ * Vision model: Qwen/Qwen2.5-VL-7B-Instruct via HuggingFace Inference API.
+ *   Free with any HF account token (huggingface.co/settings/tokens).
+ *   OpenRouter free tier removed their Qwen endpoint — HF is more stable.
+ *
  * TTS provider chain (no API key required for any of these):
  *   1. edge-tts  — Microsoft Edge neural TTS via WebSocket (free, sw-TZ-DaudiNeural)
  *   2. Piper TTS — Open-source self-hosted server (set PIPER_TTS_URL secret)
- *   ElevenLabs removed — API keys are unreliable and expensive.
  */
 
 interface Env {
-  // Vision
-  OPENROUTER_API_KEY: string
+  // Vision — HuggingFace token (free at huggingface.co/settings/tokens)
+  HF_TOKEN: string
+  // Vision fallback — Anthropic Claude Sonnet (optional, improves accuracy)
   ANTHROPIC_API_KEY: string
 
   // TTS — no keys needed for edge-tts or Piper, but Piper needs a server URL
@@ -106,26 +110,55 @@ export default {
 }
 
 // ---------------------------------------------------------------------------
-// Vision: Qwen2.5-VL via OpenRouter (primary — free tier)
+// Vision: Qwen2.5-VL-7B via HuggingFace Inference API (primary — free)
+//
+// Model: Qwen/Qwen2.5-VL-7B-Instruct
+//   - Free with any HuggingFace account token
+//   - Strong at UI understanding, form fields, button detection
+//   - 7B size runs on HF serverless infrastructure
+//
+// Get your token: https://huggingface.co/settings/tokens
+// Set secret:     wrangler secret put HF_TOKEN
 // ---------------------------------------------------------------------------
 
-async function handleQwenVision(request: Request, env: Env): Promise<Response> {
-  const body = await request.text()
+const HF_QWEN_URL =
+  'https://api-inference.huggingface.co/models/Qwen/Qwen2.5-VL-7B-Instruct/v1/chat/completions'
 
-  const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+async function handleQwenVision(request: Request, env: Env): Promise<Response> {
+  if (!env.HF_TOKEN) {
+    return corsResponse(
+      JSON.stringify({ error: 'HF_TOKEN secret not set. Add it with: wrangler secret put HF_TOKEN' }),
+      { status: 500, headers: { 'content-type': 'application/json' } }
+    )
+  }
+
+  // Parse the body from the desktop client and rewrite the model field
+  // to the exact HF model ID (desktop sends the generic name)
+  const incomingBody = await request.json() as {
+    messages: unknown[]
+    max_tokens?: number
+    temperature?: number
+  }
+
+  const hfBody = {
+    model: 'Qwen/Qwen2.5-VL-7B-Instruct',
+    messages: incomingBody.messages,
+    max_tokens: incomingBody.max_tokens ?? 512,
+    temperature: incomingBody.temperature ?? 0.3
+  }
+
+  const response = await fetch(HF_QWEN_URL, {
     method: 'POST',
     headers: {
-      'Authorization': `Bearer ${env.OPENROUTER_API_KEY}`,
-      'Content-Type': 'application/json',
-      'HTTP-Referer': 'https://mwongozo.app',
-      'X-Title': 'Mwongozo'
+      'Authorization': `Bearer ${env.HF_TOKEN}`,
+      'Content-Type': 'application/json'
     },
-    body
+    body: JSON.stringify(hfBody)
   })
 
   if (!response.ok) {
     const errorBody = await response.text()
-    console.error(`[/vision/qwen] OpenRouter error ${response.status}: ${errorBody}`)
+    console.error(`[/vision/qwen] HuggingFace error ${response.status}: ${errorBody}`)
     return corsResponse(errorBody, {
       status: response.status,
       headers: { 'content-type': 'application/json' }
