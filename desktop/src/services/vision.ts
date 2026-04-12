@@ -248,27 +248,19 @@ export async function getGuidance(
   userQuery: string,
   context: FlowContext
 ): Promise<GuidanceResult> {
-  // Step 1: Try Qwen (free/cheap)
+  // Step 1: Try Claude (best accuracy for UI understanding)
   try {
-    const qwenResult = await callQwenVision(screenshotBuffer, userQuery, context)
-
-    if (qwenResult.confidence >= 0.7) {
-      console.info(`[vision] Qwen response accepted (confidence=${qwenResult.confidence})`)
-      return qwenResult
-    }
-
-    // Low confidence — log and fall through to Claude
-    console.warn(
-      `[vision] Qwen confidence too low (${qwenResult.confidence}) — falling back to Claude`
-    )
+    const claudeResult = await callClaudeVision(screenshotBuffer, userQuery, context)
+    console.info('[vision] Claude response accepted')
+    return claudeResult
   } catch (err) {
-    console.error('[vision] Qwen failed, falling back to Claude:', err)
+    console.warn('[vision] Claude failed, falling back to Llama:', err)
   }
 
-  // Step 2: Fall back to Claude
-  console.info('[vision] Using Claude fallback')
-  const claudeResult = await callClaudeVision(screenshotBuffer, userQuery, context)
-  return claudeResult
+  // Step 2: Fall back to Llama via OpenRouter (free)
+  console.info('[vision] Using Llama fallback')
+  const llamaResult = await callQwenVision(screenshotBuffer, userQuery, context)
+  return llamaResult
 }
 
 // ---------------------------------------------------------------------------
