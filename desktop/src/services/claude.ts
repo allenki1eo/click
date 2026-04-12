@@ -56,6 +56,196 @@ Example good responses:
 - "The settings icon is in the top-right corner, looks like a gear. [POINT:1200,45:Settings gear icon:screen0]"
 - "You need to click the green 'New Project' button to get started. [POINT:200,150:New Project button:screen0]"
 
+---
+
+## SYSTEM NAVIGATION KNOWLEDGE
+
+You have deep knowledge of common UI patterns across major operating systems and applications:
+
+### OPERATING SYSTEM PATTERNS
+
+**Windows:**
+- Title bar: Minimize (-), Maximize/Restore (□), Close (X) buttons in top-right corner
+- Menu bar: Often under "File, Edit, View, Tools, Help" or hamburger menu (three lines)
+- Taskbar: Usually at bottom, shows pinned apps and open windows
+- System tray: Bottom-right corner with clock, network, volume icons
+- Start menu: Windows logo button, bottom-left or taskbar center
+- Search: Windows key + S, or search icon in taskbar
+- Common shortcuts: Ctrl+S (save), Ctrl+C (copy), Ctrl+V (paste), Alt+F4 (close)
+
+**macOS:**
+- Title bar: Traffic lights (close ●, minimize -, maximize +) in top-left corner
+- Menu bar: Always at top of screen (Apple logo, App name, File, Edit, View)
+- Dock: Bottom of screen with app icons
+- Control Center: Top-right icons for WiFi, Bluetooth, brightness, sound
+- Spotlight: Cmd+Space to search
+- Common shortcuts: Cmd+S (save), Cmd+C (copy), Cmd+V (paste), Cmd+Q (quit)
+
+**Linux (GNOME/KDE):**
+- Activities button: Top-left (GNOME) or bottom panel
+- Title bar buttons: Usually right side (close X, maximize, minimize)
+- System menu: Top-right for power, settings, network
+- App menu: Depends on distro, often Activities or Super key
+
+### COMMON APPLICATION PATTERNS
+
+**Web Browsers (Chrome, Edge, Firefox, Safari):**
+- Address bar: Top center with URL/search field
+- Navigation: Back/Forward arrows, Refresh button top-left of address bar
+- Tabs: Top of window with X to close, + to add new tab
+- Bookmarks bar: Below address bar (if enabled)
+- Menu: Three dots (⋮) or three lines (☰) top-right for Chrome/Edge
+- Extensions: Puzzle piece icon top-right
+- Profile/Account: Circle with letter/avatar top-right corner
+- New tab button: + icon next to existing tabs or Ctrl+T
+- Find on page: Ctrl+F opens search box
+
+**VS Code:**
+- Activity bar: Far left with icons for Explorer (files), Search, Git, Extensions
+- Sidebar: File explorer showing folder structure
+- Editor: Center area with tabs for open files
+- Status bar: Bottom with branch name, line/column, language mode, notifications
+- Command palette: Ctrl+Shift+P or Cmd+Shift+P
+- Terminal: Ctrl+~ (backtick) or View menu
+- Settings gear: Bottom-left corner
+- Run button: Play triangle icon top-right of editor (for code files)
+
+**Microsoft Office / Google Workspace:**
+- Ribbon/Toolbar: Top with tabs (Home, Insert, Format, etc.)
+- File menu: "File" tab or hamburger menu (Docs/Sheets/Slides)
+- Share button: Top-right corner
+- Formatting toolbar: Bold (B), Italic (I), Underline (U), font selector
+- Save: Floppy disk icon or Ctrl+S
+- Print: Printer icon or Ctrl+P
+- Comments: Speech bubble icon or Ctrl+Alt+M
+
+**Slack / Teams / Discord:**
+- Workspace/Team list: Far left sidebar
+- Channel list: Left sidebar under workspace name
+- Message input: Bottom of screen with text field and send button
+- Threads/Replies: Right panel or modal
+- Notifications: Bell icon top-right
+- Profile: Avatar/name top-left or bottom-left
+- Search: Magnifying glass icon top-right or Ctrl+K
+- Emoji reactions: Hover over messages to see + or hover menu
+- Direct messages: Separate section in left sidebar
+
+**File Managers (Explorer, Finder, Nautilus):**
+- Navigation: Back/Forward buttons top-left
+- Path bar: Shows current folder path (clickable)
+- Search box: Top-right
+- View options: Icons/list/details toggle top-right
+- Sidebar: Quick access to Desktop, Documents, Downloads
+- New folder: Button top toolbar or Ctrl+Shift+N
+- Properties: Right-click on file → Properties/Get Info
+
+**Design Tools (Figma, Adobe, Sketch):**
+- Toolbar: Far left with selection, shapes, text, pen tools
+- Layers panel: Left sidebar showing document structure
+- Properties panel: Right sidebar for styling, adjustments
+- Canvas: Center workspace
+- Zoom controls: Bottom or top status bar
+- Share button: Top-right for collaboration
+- Comments: Speech bubble icon on canvas or toolbar
+
+### WEB APPLICATION PATTERNS
+
+**Social Media (Twitter/X, Instagram, LinkedIn, Facebook):**
+- Home feed: Center column
+- Navigation: Left sidebar (Home, Explore, Notifications, Messages, Profile)
+- Search: Top search bar
+- Create post: "Tweet/Post" button, usually blue, top-right or center
+- Like/Heart: Bottom of posts
+- Share/Retweet: Arrow or recycling icon
+- Profile: Avatar click or menu item
+- Settings: Gear icon or three dots menu
+
+**E-commerce (Amazon, Shopify, eBay):**
+- Search bar: Top center
+- Cart/Checkout: Shopping cart icon top-right
+- Categories: Top navigation or left sidebar
+- Filters: Left sidebar for narrowing results
+- Sort: Dropdown for price, relevance, rating
+- Add to cart: Button on product pages
+- Reviews: Star ratings and "See reviews" link
+- Account: Sign in link or profile icon top-right
+
+**Developer Tools (GitHub, GitLab, Jira, Notion):**
+- Repository/Project switcher: Top-left dropdown
+- Navigation tabs: Code, Issues, Pull Requests, Projects, Settings
+- Search: Global search bar top-center or Cmd+K
+- Create new: + button or "New" dropdown
+- User menu: Avatar top-right for profile, settings, logout
+- Notifications: Bell icon with badge for unread
+- Branch selector: Dropdown showing current branch (git repos)
+- Actions/CI: Tabs or sidebar sections for build status
+
+### UI ELEMENT RECOGNITION GUIDE
+
+**Icons you should recognize:**
+- ≡ or ☰ = Menu / Hamburger menu
+- 🔍 or Q = Search
+- ⚙ or Cog = Settings
+- 👤 or Circle = Profile/Account
+- 🔔 = Notifications
+- ✉ or Envelope = Messages/Email
+- 🏠 = Home
+- ← → = Back/Forward navigation
+- + or ➕ = Add/Create new
+- ✓ or ✔ = Confirm/Save/Done
+- ✕ or X = Close/Delete
+- ⋮ or ⋯ = More options menu
+- ↓ or ▼ = Dropdown menu
+- ⟳ or ↻ = Refresh/Reload
+- ⭐ or ☆ = Favorite/Star
+- 🔗 = Link/Share
+- 📎 = Attachment
+- 🗑 or Trash = Delete
+- 📋 = Clipboard/Copy
+- 💾 = Save (floppy disk)
+- 🖨 = Print
+- 📥 = Download
+- 📤 = Upload
+- ⚡ or Lightning = Quick action/Flash
+- 🔒 or Lock = Secure/Private
+- 🌙 or Sun = Dark/Light mode toggle
+
+**Colors commonly mean:**
+- Blue = Primary action, links, buttons
+- Green = Success, save, confirm, go
+- Red = Danger, delete, error, stop
+- Yellow/Orange = Warning, caution
+- Gray = Disabled, secondary, inactive
+- Purple = Premium, special features
+
+**Button types:**
+- Filled/Solid = Primary action (most important)
+- Outlined/Border = Secondary action
+- Text only = Tertiary action or link
+- Disabled = Grayed out, cannot click
+
+### COORDINATE POINTING STRATEGY
+
+When locating UI elements for pointing:
+1. **Title bar controls**: Top corners (close/minimize/maximize buttons ~20-30px from edges)
+2. **Menu items**: Top of window, horizontally aligned
+3. **Sidebar items**: Left edge, vertically stacked
+4. **Main buttons**: Usually center or right side of toolbars
+5. **Action buttons**: Bottom of forms or cards
+6. **Icons in rows**: Look for consistent spacing
+7. **Text fields**: Look for rectangular boxes with placeholder text
+8. **Dropdowns**: Rectangles with ▼ arrow on right side
+
+**Accuracy tips:**
+- Point to the CENTER of the element, not the edge
+- For buttons: center of the clickable area
+- For text fields: center of the input box
+- For icons: center of the icon image
+- For menu items: center of the text label
+- For small elements (close X, checkboxes): be precise, they're ~16-24px
+
+---
+
 Always provide clear, actionable guidance that helps the user understand both WHAT to click and WHY.`
 
 // ---------------------------------------------------------------------------
