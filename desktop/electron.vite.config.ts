@@ -8,35 +8,31 @@ export default defineConfig({
     build: {
       rollupOptions: {
         input: {
-          index: resolve(__dirname, 'src/main/index.ts')
-        }
-      }
-    }
+          index: resolve(__dirname, 'src/main/index.ts'),
+        },
+      },
+    },
   },
   preload: {
     plugins: [externalizeDepsPlugin()],
     build: {
       rollupOptions: {
         input: {
-          index: resolve(__dirname, 'src/preload/index.ts')
-        }
-      }
-    }
+          index: resolve(__dirname, 'src/preload/index.ts'),
+        },
+      },
+    },
   },
   renderer: {
-    // Multiple renderer entry points: panel (tray), overlay, onboarding
-    plugins: [react()],
-    css: {
-      postcss: resolve(__dirname, 'postcss.config.js')
-    },
+    root: resolve(__dirname, 'src/renderer'),
     build: {
       rollupOptions: {
         input: {
-          panel: resolve(__dirname, 'src/renderer/panel/index.html'),
+          panel:   resolve(__dirname, 'src/renderer/panel/index.html'),
           overlay: resolve(__dirname, 'src/renderer/overlay/index.html'),
-          onboarding: resolve(__dirname, 'src/renderer/onboarding/index.html')
-        }
-      }
-    }
-  }
+        },
+      },
+    },
+    plugins: [react()],
+  },
 })

@@ -1,56 +1,39 @@
 /**
- * Overlay window manager.
- *
- * Ported from OverlayWindow.swift (Clicky).
- *
- * The overlay is a full-screen transparent BrowserWindow that sits on top
- * of all other windows (alwaysOnTop: true, focusable: false). It renders
- * the animated cursor pointer and the AI response text bubble.
- *
- * Key constraint: the window must NEVER steal focus. We achieve this with
- * focusable: false and setIgnoreMouseEvents(true, { forward: true }) so
- * all mouse events pass through to the app below.
+ * Overlay window manager — mirrors OverlayWindow.swift.
+ * Full-screen transparent window, always on top, never steals focus.
  */
 
-import { BrowserWindow, ipcMain, screen } from 'electron'
+import { BrowserWindow, screen, ipcMain } from 'electron'
 import { IPC } from '../shared/ipc'
-import type { PointTarget } from '../shared/types'
 
-export class OverlayManager {
-  private readonly overlayWindow: BrowserWindow
+export function createOverlayWindow(preload: string): BrowserWindow {
+  const { bounds } = screen.getPrimaryDisplay()
 
-  constructor(overlayWindow: BrowserWindow) {
-    this.overlayWindow = overlayWindow
-    this.sizeToCurrentScreen()
-  }
+  const win = new BrowserWindow({
+    x: bounds.x,
+    y: bounds.y,
+    width: bounds.width,
+    height: bounds.height,
+    transparent: true,
+    frame: false,
+    alwaysOnTop: true,
+    focusable: false,
+    skipTaskbar: true,
+    show: false,
+    webPreferences: {
+      preload,
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: false,
+    },
+  })
 
-  registerIpcHandlers(): void {
-    ipcMain.on(IPC.OVERLAY.SHOW, () => {
-      this.sizeToCurrentScreen()
-      this.overlayWindow.show()
-    })
+  win.setIgnoreMouseEvents(true, { forward: true })
+  return win
+}
 
-    ipcMain.on(IPC.OVERLAY.HIDE, () => {
-      this.overlayWindow.hide()
-    })
-
-    ipcMain.on(IPC.OVERLAY.POINT, (_, point: PointTarget) => {
-      this.overlayWindow.webContents.send(IPC.OVERLAY.POINT, point)
-    })
-
-    ipcMain.on(IPC.OVERLAY.SET_TEXT, (_, text: string) => {
-      this.overlayWindow.webContents.send(IPC.OVERLAY.SET_TEXT, text)
-    })
-  }
-
-  /**
-   * Resize the overlay window to match the primary display dimensions.
-   * Called each time we show the overlay so it stays correct after
-   * display configuration changes (resolution change, monitor added/removed).
-   */
-  private sizeToCurrentScreen(): void {
-    const primaryDisplay = screen.getPrimaryDisplay()
-    const { x, y, width, height } = primaryDisplay.bounds
-    this.overlayWindow.setBounds({ x, y, width, height })
-  }
+/** Resize overlay to primary display — call when display config changes */
+export function resizeOverlayToScreen(win: BrowserWindow): void {
+  const { bounds } = screen.getPrimaryDisplay()
+  win.setBounds(bounds)
 }

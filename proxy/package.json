@@ -1,16 +1,14 @@
 {
   "name": "mwongozo-proxy",
-  "version": "0.1.0",
-  "description": "Cloudflare Worker proxy — keeps all API keys off the desktop client",
+  "version": "1.0.0",
   "private": true,
   "scripts": {
     "dev": "wrangler dev",
-    "deploy": "wrangler deploy",
-    "typecheck": "tsc --noEmit"
+    "deploy": "wrangler deploy"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20240208.0",
     "typescript": "^5.3.0",
-    "wrangler": "^3.0.0"
+    "wrangler": "^3.114.0"
   }
 }

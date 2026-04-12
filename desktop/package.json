@@ -1,76 +1,62 @@
 {
   "name": "mwongozo-desktop",
   "version": "0.1.0",
-  "description": "AI Navigation Companion for East African Business Portals",
+  "description": "Mwongozo — AI Navigation Companion for East African Business Portals",
   "main": "./out/main/index.js",
   "scripts": {
     "dev": "electron-vite dev",
     "build": "electron-vite build",
     "preview": "electron-vite preview",
-    "typecheck": "tsc --noEmit",
-    "package": "npm run build && electron-builder",
-    "package:win": "npm run build && electron-builder --win",
-    "package:mac": "npm run build && electron-builder --mac"
+    "lint": "eslint . --ext .ts,.tsx",
+    "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
+    "package": "npm run build && electron-builder"
   },
+  "keywords": [],
+  "author": "Mwongozo",
+  "license": "MIT",
   "dependencies": {
     "@electron-toolkit/utils": "^3.0.0",
-    "electron-store": "^8.1.0"
+    "electron-store": "^8.2.0",
+    "uiohook-napi": "^1.5.3"
   },
   "devDependencies": {
-    "@electron-toolkit/tsconfig": "^1.0.1",
-    "@types/node": "^20.11.0",
-    "@types/react": "^18.2.0",
-    "@types/react-dom": "^18.2.0",
-    "@vitejs/plugin-react": "^4.2.0",
-    "autoprefixer": "^10.4.0",
-    "electron": "^28.2.0",
-    "electron-builder": "^24.9.0",
-    "electron-vite": "^2.0.0",
-    "postcss": "^8.4.0",
-    "react": "^18.2.0",
-    "react-dom": "^18.2.0",
-    "tailwindcss": "^3.4.0",
-    "typescript": "^5.3.0"
+    "@electron-toolkit/tsconfig": "^1.0.5",
+    "@types/node": "^20.14.2",
+    "@types/react": "^18.3.3",
+    "@types/react-dom": "^18.3.0",
+    "@vitejs/plugin-react": "^4.3.1",
+    "autoprefixer": "^10.4.19",
+    "electron": "^31.1.0",
+    "electron-builder": "^24.13.3",
+    "electron-vite": "^2.3.0",
+    "postcss": "^8.4.38",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "tailwindcss": "^3.4.4",
+    "typescript": "^5.5.2"
   },
   "build": {
     "appId": "com.mwongozo.desktop",
     "productName": "Mwongozo",
-    "copyright": "Copyright © 2024 Mwongozo",
-    "asar": true,
     "directories": {
-      "output": "release"
+      "buildResources": "resources",
+      "output": "dist"
     },
     "files": [
       "out/**/*",
-      "flows/**/*"
-    ],
-    "extraResources": [
-      {
-        "from": "flows",
-        "to": "flows"
-      }
+      "resources/**/*"
     ],
     "win": {
-      "target": [
-        { "target": "nsis", "arch": ["x64"] }
-      ],
+      "target": "nsis",
       "icon": "resources/icon.ico"
     },
     "mac": {
-      "target": [
-        { "target": "dmg", "arch": ["x64", "arm64"] }
-      ],
-      "icon": "resources/icon.icns",
-      "category": "public.app-category.productivity"
+      "target": "dmg",
+      "icon": "resources/icon.icns"
     },
     "linux": {
-      "target": ["AppImage"],
+      "target": "AppImage",
       "icon": "resources/icon.png"
-    },
-    "nsis": {
-      "oneClick": false,
-      "allowToChangeInstallationDirectory": true,
-      "createDesktopShortcut": true
     }
   }
 }

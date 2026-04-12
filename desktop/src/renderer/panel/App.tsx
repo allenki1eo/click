@@ -1,413 +1,242 @@
 /**
- * PanelApp — the tray panel UI.
+ * Panel UI — mirrors CompanionPanelView.swift.
  *
- * Ported from CompanionPanelView.swift (Clicky).
- *
- * All IPC goes through window.electronAPI (contextBridge).
- * No direct window.ipcRenderer access — that is never exposed.
+ * Shows the current state, streams Claude's response token-by-token as it
+ * types in (just like clicky's progressive text display), and has a PTT
+ * button as a click alternative to the keyboard shortcut.
  */
 
 import React, { useEffect, useRef, useState } from 'react'
-import { DS } from '../styles/design-tokens'
-import type { CompanionStatus, GuidanceResult, OrgProfile } from '../../shared/types'
+import type { CompanionStatus } from '../../shared/types'
 
 // ---------------------------------------------------------------------------
-// State indicator dot
+// State dot
 // ---------------------------------------------------------------------------
 
-function StateIndicator({ state }: { state: string }): React.ReactElement {
-  const color = DS.stateColors[state] ?? DS.colors.accent
-  const isPulsing = state === 'listening' || state === 'speaking'
+const DOT_COLOR: Record<string, string> = {
+  idle:       '#6b7280',
+  listening:  '#10b981',
+  processing: '#3b82f6',
+  responding: '#f59e0b',
+}
+
+function Dot({ state }: { state: string }): React.ReactElement {
+  const pulse = state === 'listening' || state === 'responding'
   return (
     <span
-      className={`inline-block w-2 h-2 rounded-full flex-shrink-0 ${isPulsing ? 'animate-pulse-slow' : ''}`}
-      style={{ backgroundColor: color }}
+      className={`inline-block w-2 h-2 rounded-full ${pulse ? 'animate-pulse' : ''}`}
+      style={{ backgroundColor: DOT_COLOR[state] ?? '#6b7280' }}
     />
   )
 }
 
 // ---------------------------------------------------------------------------
-// Push-to-talk button
+// PTT button
 // ---------------------------------------------------------------------------
 
-interface PttButtonProps {
-  isListening: boolean
-  isDisabled: boolean
+function PttButton({
+  listening,
+  disabled,
+  onPress,
+  onRelease,
+}: {
+  listening: boolean
+  disabled: boolean
   onPress: () => void
   onRelease: () => void
-}
-
-function PttButton({ isListening, isDisabled, onPress, onRelease }: PttButtonProps): React.ReactElement {
+}): React.ReactElement {
   return (
     <button
       className={`
-        w-full py-3 px-4 rounded-lg font-medium text-sm transition-all duration-150
-        flex items-center justify-center gap-2
-        ${isListening
-          ? 'bg-accent text-bg shadow-lg scale-[0.98]'
-          : isDisabled
-            ? 'bg-surface2 text-muted cursor-not-allowed opacity-50'
-            : 'bg-surface2 text-white hover:bg-opacity-80 active:scale-[0.98]'
-        }
+        w-full py-3 rounded-lg font-medium text-sm flex items-center justify-center gap-2
+        transition-all duration-150 select-none
+        ${listening ? 'bg-green-500 text-black scale-[0.98]' :
+          disabled  ? 'bg-gray-700 text-gray-500 cursor-not-allowed' :
+                      'bg-gray-700 text-white hover:bg-gray-600 active:scale-[0.98]'}
       `}
-      onMouseDown={isDisabled ? undefined : onPress}
-      onMouseUp={isDisabled ? undefined : onRelease}
-      onTouchStart={isDisabled ? undefined : onPress}
-      onTouchEnd={isDisabled ? undefined : onRelease}
-      disabled={isDisabled}
+      onMouseDown={disabled ? undefined : onPress}
+      onMouseUp={disabled ? undefined : onRelease}
+      onTouchStart={disabled ? undefined : onPress}
+      onTouchEnd={disabled ? undefined : onRelease}
+      disabled={disabled}
     >
-      <MicIcon active={isListening} />
-      {isListening
-        ? 'Sikilizando… (achia)'
-        : 'Shikilia kusema (Ctrl+Shift+Space)'}
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+        <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
+        <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+        <line x1="12" y1="19" x2="12" y2="23" />
+        <line x1="8"  y1="23" x2="16" y2="23" />
+      </svg>
+      {listening ? 'Listening… (release to send)' : 'Hold to talk  Ctrl+Shift+Space'}
     </button>
   )
 }
 
-function MicIcon({ active }: { active: boolean }): React.ReactElement {
-  return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-      <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
-      <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
-      <line x1="12" y1="19" x2="12" y2="23" />
-      <line x1="8" y1="23" x2="16" y2="23" />
-      {active && <circle cx="12" cy="7" r="1.5" fill="currentColor" className="animate-ping" />}
-    </svg>
-  )
-}
-
 // ---------------------------------------------------------------------------
-// Guidance response card
+// Main app
 // ---------------------------------------------------------------------------
 
-function GuidanceCard({ guidance }: { guidance: GuidanceResult }): React.ReactElement {
-  return (
-    <div className="bg-surface rounded-lg p-3 text-sm animate-slide-up selectable">
-      <p className="text-white leading-relaxed">{guidance.text}</p>
-      {guidance.points.length > 0 && (
-        <div className="mt-2 flex items-center gap-1 text-xs text-muted">
-          <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor">
-            <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z" />
-          </svg>
-          Inaonyesha eneo la kitufe
-        </div>
-      )}
-      <div className="mt-2 text-xs opacity-40">
-        via {guidance.modelUsed === 'qwen2.5-vl' ? 'Qwen2.5-VL' : guidance.modelUsed === 'claude-sonnet' ? 'Claude Sonnet' : 'demo'}
-      </div>
-    </div>
-  )
-}
-
-// ---------------------------------------------------------------------------
-// Error card with reset button
-// ---------------------------------------------------------------------------
-
-function ErrorCard({ message, onReset }: { message: string; onReset: () => void }): React.ReactElement {
-  return (
-    <div className="bg-danger/10 border border-danger/30 rounded-lg p-3 text-sm animate-fade-in">
-      <div className="flex items-start gap-2">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#ef4444" strokeWidth="2" className="flex-shrink-0 mt-0.5">
-          <circle cx="12" cy="12" r="10" />
-          <line x1="12" y1="8" x2="12" y2="12" />
-          <line x1="12" y1="16" x2="12.01" y2="16" />
-        </svg>
-        <p className="text-danger leading-relaxed flex-1">{message || 'Hitilafu imetokea.'}</p>
-      </div>
-      <button
-        onClick={onReset}
-        className="mt-3 w-full py-1.5 px-3 rounded-md text-xs font-medium bg-danger/20 text-danger hover:bg-danger/30 transition-colors"
-      >
-        Jaribu tena / Retry
-      </button>
-    </div>
-  )
-}
-
-// ---------------------------------------------------------------------------
-// Flow progress bar
-// ---------------------------------------------------------------------------
-
-function FlowProgress({ flowId, currentStep, totalSteps }: {
-  flowId: string
-  currentStep: number
-  totalSteps: number
-}): React.ReactElement {
-  const progress = totalSteps > 0 ? (currentStep / totalSteps) * 100 : 0
-  const labels: Record<string, string> = {
-    'tra-vat-filing': 'TRA VAT',
-    'tra-paye': 'TRA PAYE',
-    'brela-registration': 'BRELA',
-    'zssf-contribution': 'ZSSF',
-    'nhif-registration': 'NHIF',
-  }
-  return (
-    <div className="space-y-1">
-      <div className="flex justify-between text-xs text-muted">
-        <span>{labels[flowId] ?? flowId}</span>
-        <span>Hatua {currentStep}/{totalSteps}</span>
-      </div>
-      <div className="w-full h-1.5 bg-surface2 rounded-pill overflow-hidden">
-        <div
-          className="h-full bg-accent rounded-pill transition-all duration-500"
-          style={{ width: `${progress}%` }}
-        />
-      </div>
-    </div>
-  )
-}
-
-// ---------------------------------------------------------------------------
-// Main app component
-// ---------------------------------------------------------------------------
-
-export function PanelApp(): React.ReactElement {
-  const [profile, setProfile] = useState<OrgProfile | null>(null)
-  const [status, setStatus] = useState<CompanionStatus | null>(null)
-  const [lastGuidance, setLastGuidance] = useState<GuidanceResult | null>(null)
-  const [isListening, setIsListening] = useState(false)
-  const [transcript, setTranscript] = useState('')
-  const [errorMessage, setErrorMessage] = useState('')
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null)
-
-  // ---------------------------------------------------------------------------
-  // Mount: load profile, status, subscribe to all IPC events
-  // ---------------------------------------------------------------------------
+export function App(): React.ReactElement {
+  const [status, setStatus] = useState<CompanionStatus>({
+    state: 'idle', responseText: '', transcript: '', error: '',
+  })
+  const [streamedText, setStreamedText] = useState('')
+  const [listening, setListening] = useState(false)
+  const recorder = useRef<MediaRecorder | null>(null)
 
   useEffect(() => {
-    window.electronAPI.getProfile().then(setProfile)
-    window.electronAPI.getCompanionStatus().then(setStatus)
+    window.api.getStatus().then(setStatus)
 
-    const unsubs = [
-      window.electronAPI.onStateChange((s) => {
+    const subs = [
+      window.api.onStatus((s) => {
         setStatus(s)
-        setIsListening(s.state === 'listening')
-        if (s.state === 'error') {
-          setErrorMessage(s.errorMessage ?? 'Hitilafu imetokea. / An error occurred.')
-        } else {
-          setErrorMessage('')
-        }
+        setListening(s.state === 'listening')
+        if (s.state === 'processing') setStreamedText('')
       }),
-
-      window.electronAPI.onGuidanceResult((result) => setLastGuidance(result)),
-
-      window.electronAPI.onTranscriptionResult((text) => setTranscript(text)),
-
-      // Hotkey events from main (when user uses keyboard shortcut)
-      window.electronAPI.onHotkeyPress(() => {
-        setIsListening(true)
-        startMicCapture()
+      window.api.onHotkeyPress(() => { setListening(true); startMic() }),
+      window.api.onHotkeyRelease(() => { setListening(false); stopMic() }),
+      window.api.onClaudeChunk((chunk) => setStreamedText((t) => t + chunk)),
+      window.api.onClaudeDone(() => { /* streaming finished */ }),
+      window.api.onTtsPlay((b64) => {
+        playAudio(b64).finally(() => window.api.notifyTtsDone())
       }),
-      window.electronAPI.onHotkeyRelease(() => {
-        setIsListening(false)
-        stopMicCapture()
-      }),
-
-      // TTS: main sends MP3 buffer, we play it via Web Audio API
-      window.electronAPI.onPlayAudio((base64mp3) => {
-        playBase64Audio(base64mp3)
-          .catch((err) => console.error('[panel] Web Audio playback failed:', err))
-          .finally(() => window.electronAPI.notifyAudioDone())
-      }),
-
-      // TTS: main asks us to use the browser's built-in speech synthesis
-      window.electronAPI.onWebSpeech(({ text, language }) => {
-        speakViaWebSpeechAPI(text, language)
-          .finally(() => window.electronAPI.notifyWebSpeechDone())
+      window.api.onWebSpeech((text) => {
+        webSpeech(text).finally(() => window.api.notifyWebSpeechDone())
       }),
     ]
 
-    return () => unsubs.forEach((unsub) => unsub())
+    return () => subs.forEach((u) => u())
   }, [])
 
-  // ---------------------------------------------------------------------------
-  // Mic capture (Web Audio API — runs in renderer, sends chunks to main)
-  // ---------------------------------------------------------------------------
-
-  async function startMicCapture(): Promise<void> {
+  // Mic capture
+  async function startMic(): Promise<void> {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-      const recorder = new MediaRecorder(stream, { mimeType: 'audio/webm' })
-      mediaRecorderRef.current = recorder
-
-      recorder.ondataavailable = (e) => {
-        if (e.data.size === 0) return
+      const rec = new MediaRecorder(stream, { mimeType: 'audio/webm' })
+      recorder.current = rec
+      rec.ondataavailable = (e) => {
+        if (!e.data.size) return
         const reader = new FileReader()
         reader.onloadend = () => {
-          const base64 = (reader.result as string).split(',')[1]
-          window.electronAPI.sendAudioChunk(base64)
+          const b64 = (reader.result as string).split(',')[1]
+          window.api.sendAudioChunk(b64)
         }
         reader.readAsDataURL(e.data)
       }
-
-      recorder.start(250)
-    } catch (err) {
-      console.error('[panel] Mic access denied:', err)
-      setErrorMessage('Ruhusa ya maikrofoni ilikataliwa. / Microphone permission denied.')
+      rec.start(250)
+    } catch {
+      console.error('[panel] Mic access denied')
     }
   }
 
-  function stopMicCapture(): void {
-    const recorder = mediaRecorderRef.current
-    if (recorder && recorder.state !== 'inactive') {
-      recorder.stop()
-      recorder.stream.getTracks().forEach((t) => t.stop())
-      window.electronAPI.sendAudioStop()
+  function stopMic(): void {
+    const rec = recorder.current
+    if (rec && rec.state !== 'inactive') {
+      rec.stop()
+      rec.stream.getTracks().forEach((t) => t.stop())
+      window.api.sendAudioStop()
     }
-    mediaRecorderRef.current = null
+    recorder.current = null
   }
 
-  // ---------------------------------------------------------------------------
-  // PTT button handlers (click alternative to keyboard shortcut)
-  // ---------------------------------------------------------------------------
-
-  function handlePttPress(): void {
-    if (status?.state !== 'idle') return
-    setIsListening(true)
-    startMicCapture()
+  // PTT button handlers
+  function handlePress(): void {
+    if (status.state !== 'idle') return
+    setListening(true); startMic()
+  }
+  function handleRelease(): void {
+    setListening(false); stopMic()
   }
 
-  function handlePttRelease(): void {
-    setIsListening(false)
-    stopMicCapture()
-  }
-
-  // ---------------------------------------------------------------------------
-  // Error recovery
-  // ---------------------------------------------------------------------------
-
-  async function handleReset(): Promise<void> {
-    stopMicCapture()
-    setIsListening(false)
-    setErrorMessage('')
-    await window.electronAPI.resetCompanion()
-  }
-
-  // ---------------------------------------------------------------------------
-  // TTS: Web Audio API playback (for edge-tts / Piper MP3 buffers)
-  // ---------------------------------------------------------------------------
-
-  async function playBase64Audio(base64: string): Promise<void> {
-    const audioCtx = new AudioContext()
+  // Audio playback
+  async function playAudio(base64: string): Promise<void> {
+    const ctx = new AudioContext()
     const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0))
-    const audioBuffer = await audioCtx.decodeAudioData(bytes.buffer)
-    const source = audioCtx.createBufferSource()
-    source.buffer = audioBuffer
-    source.connect(audioCtx.destination)
-    return new Promise((resolve) => {
-      source.onended = () => resolve()
-      source.start()
-    })
+    const buf = await ctx.decodeAudioData(bytes.buffer)
+    const src = ctx.createBufferSource()
+    src.buffer = buf
+    src.connect(ctx.destination)
+    return new Promise((res) => { src.onended = () => res(); src.start() })
   }
 
-  // ---------------------------------------------------------------------------
-  // TTS: Web Speech API fallback (no server needed, built into Windows)
-  // ---------------------------------------------------------------------------
-
-  async function speakViaWebSpeechAPI(text: string, language: string): Promise<void> {
-    return new Promise((resolve) => {
-      if (!window.speechSynthesis) { resolve(); return }
-
+  async function webSpeech(text: string): Promise<void> {
+    return new Promise((res) => {
+      if (!window.speechSynthesis) { res(); return }
       window.speechSynthesis.cancel()
-      const utterance = new SpeechSynthesisUtterance(text)
-      utterance.lang = language === 'sw' ? 'sw-TZ' : 'en-GB'
-      utterance.rate = 0.95
-
-      // Pick the best available Swahili voice if present
-      const voices = window.speechSynthesis.getVoices()
-      const swVoice = voices.find((v) => v.lang.startsWith('sw') || v.name.includes('Daudi') || v.name.includes('Zuri'))
-      if (swVoice && language === 'sw') utterance.voice = swVoice
-
-      utterance.onend = () => resolve()
-      utterance.onerror = () => resolve()
-      window.speechSynthesis.speak(utterance)
+      const u = new SpeechSynthesisUtterance(text)
+      u.rate = 0.95
+      u.onend = () => res()
+      u.onerror = () => res()
+      window.speechSynthesis.speak(u)
     })
   }
 
-  // ---------------------------------------------------------------------------
-  // Render
-  // ---------------------------------------------------------------------------
-
-  const lang = profile?.language ?? 'sw'
-  const state = status?.state ?? 'idle'
-  const stateLabel = lang === 'sw' ? DS.stateLabels_sw[state] : DS.stateLabels_en[state]
-  const isPttDisabled = state !== 'idle' && state !== 'error' && !isListening
+  const { state, transcript, error } = status
+  const display = streamedText || status.responseText
 
   return (
-    <div className="h-screen flex flex-col bg-bg text-white select-none overflow-hidden" style={{ fontFamily: DS.font.ui }}>
+    <div className="h-screen flex flex-col bg-[#0d1117] text-white select-none" style={{ fontFamily: 'system-ui, sans-serif' }}>
 
       {/* Header */}
-      <div className="flex items-center gap-3 px-4 py-3 border-b border-white/8">
-        {profile?.logoUrl
-          ? <img src={profile.logoUrl} alt="" className="w-7 h-7 rounded object-contain" />
-          : <div className="w-7 h-7 rounded bg-accent flex items-center justify-center text-bg text-xs font-bold flex-shrink-0">M</div>
-        }
-        <div className="flex-1 min-w-0">
-          <p className="text-sm font-semibold truncate">{profile?.orgName ?? 'Mwongozo'}</p>
+      <div className="flex items-center gap-2 px-4 py-3 border-b border-white/10">
+        <div className="w-7 h-7 rounded-lg bg-green-500 flex items-center justify-center text-black font-bold text-sm">M</div>
+        <div className="flex-1">
+          <p className="text-sm font-semibold">Mwongozo</p>
           <div className="flex items-center gap-1.5 mt-0.5">
-            <StateIndicator state={state} />
-            <span className="text-xs text-muted">{stateLabel}</span>
+            <Dot state={state} />
+            <span className="text-xs text-gray-400 capitalize">{state}</span>
           </div>
         </div>
       </div>
 
-      {/* Flow progress */}
-      {status?.activeFlowId && status.activeFlowStep !== undefined && (
-        <div className="px-4 py-3 border-b border-white/8">
-          <FlowProgress
-            flowId={status.activeFlowId}
-            currentStep={status.activeFlowStep}
-            totalSteps={5}
-          />
-        </div>
-      )}
-
-      {/* Main content */}
+      {/* Content */}
       <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3">
 
-        {/* Error state */}
-        {state === 'error' && (
-          <ErrorCard message={errorMessage} onReset={handleReset} />
-        )}
-
-        {/* Transcript */}
-        {transcript && state !== 'error' && (
-          <div className="text-xs text-muted italic border-l-2 border-accent/40 pl-2 selectable">
-            "{transcript}"
+        {error && (
+          <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-3 text-sm text-red-400">
+            {error}
+            <button onClick={() => window.api.reset()} className="mt-2 w-full py-1.5 rounded bg-red-500/20 text-red-400 text-xs hover:bg-red-500/30">
+              Reset
+            </button>
           </div>
         )}
 
-        {/* AI guidance or empty state */}
-        {lastGuidance && state !== 'error'
-          ? <GuidanceCard guidance={lastGuidance} />
-          : state === 'idle' && !lastGuidance && (
-            <div className="text-center py-8 text-muted text-sm space-y-2">
-              <div className="text-3xl">🎙️</div>
-              <p>Shikilia <kbd className="px-1.5 py-0.5 rounded text-xs bg-surface2 font-mono">Ctrl+Shift+Space</kbd> kusema</p>
-              <p className="text-xs opacity-60">au bonyeza kitufe hapa chini</p>
-            </div>
-          )
-        }
+        {transcript && (
+          <p className="text-xs text-gray-500 italic border-l-2 border-green-500/40 pl-2">
+            "{transcript}"
+          </p>
+        )}
 
-        {/* Processing spinner */}
-        {(state === 'transcribing' || state === 'processing') && (
-          <div className="flex items-center gap-2 text-sm text-muted animate-fade-in">
+        {display ? (
+          <div className="bg-[#161b22] rounded-lg p-3 text-sm leading-relaxed text-gray-100">
+            {display}
+            {state === 'processing' && <span className="animate-pulse ml-0.5">▋</span>}
+          </div>
+        ) : state === 'idle' && (
+          <div className="text-center py-10 text-gray-500 text-sm space-y-2">
+            <p className="text-3xl">🎙️</p>
+            <p>Hold <kbd className="px-1.5 py-0.5 rounded bg-gray-700 text-xs font-mono">Ctrl+Shift+Space</kbd> and speak</p>
+            <p className="text-xs opacity-60">or use the button below</p>
+          </div>
+        )}
+
+        {state === 'processing' && !display && (
+          <div className="flex items-center gap-2 text-sm text-gray-400">
             <svg className="animate-spin w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" strokeOpacity="0.3" />
+              <path d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" strokeOpacity="0.25" />
               <path d="M21 12a9 9 0 00-9-9" />
             </svg>
-            <span>{state === 'transcribing' ? 'Inabadilisha sauti…' : 'Inafikiria…'}</span>
+            <span>Thinking…</span>
           </div>
         )}
       </div>
 
       {/* PTT button */}
-      <div className="px-4 pb-4 pt-2 border-t border-white/8">
+      <div className="px-4 pb-4 pt-2 border-t border-white/10">
         <PttButton
-          isListening={isListening}
-          isDisabled={isPttDisabled}
-          onPress={handlePttPress}
-          onRelease={handlePttRelease}
+          listening={listening}
+          disabled={state !== 'idle' && state !== 'listening'}
+          onPress={handlePress}
+          onRelease={handleRelease}
         />
       </div>
     </div>

@@ -1,243 +1,205 @@
 /**
- * CompanionManager — central state machine for the AI companion.
+ * CompanionManager — central state machine, mirrors CompanionManager.swift.
  *
- * Ported from CompanionManager.swift (Clicky).
+ * States:
+ *   idle       → user presses PTT  → listening
+ *   listening  → user releases PTT → processing
+ *   processing → Claude done       → responding
+ *   responding → TTS done          → idle
  *
- * State transitions:
- *   idle ──(hotkeyPress)──► listening
- *   listening ──(hotkeyRelease)──► transcribing
- *   transcribing ──(done)──► processing
- *   processing ──(guidanceReady)──► speaking
- *   speaking ──(ttsDone)──► idle
- *   * ──(error)──► error
- *   error ──(reset)──► idle
+ * Conversation history: last 10 turns kept in memory (same as clicky).
  */
 
 import { BrowserWindow, ipcMain } from 'electron'
 import { IPC } from '../shared/ipc'
-import type {
-  CompanionState,
-  CompanionStatus,
-  GuidanceResult,
-  FlowContext
-} from '../shared/types'
-import type { ConfigManager } from './config'
-import { captureScreenshot } from './screenshot'
-import { FlowService } from '../services/flows'
-import { getGuidance } from '../services/vision'
-import { speak, setTtsPanelWindow } from '../services/tts/kokoro'
+import type { CompanionState, CompanionStatus, Message, PointTarget } from '../shared/types'
+import { captureScreen } from './screenshot'
+import { streamGuidance } from '../services/claude'
+import { speak, setTtsWindow } from '../services/tts'
+import { transcribeAudio } from '../services/transcription'
+import { getProxyUrl } from './config'
 
-interface CompanionManagerOptions {
-  panelWindow: BrowserWindow
-  overlayWindow: BrowserWindow
-  configManager: ConfigManager
-}
+const MAX_HISTORY = 10 // keep last 10 turns, same as clicky
 
 export class CompanionManager {
   private state: CompanionState = 'idle'
-  private lastErrorMessage = ''
-  private readonly panelWindow: BrowserWindow
-  private readonly overlayWindow: BrowserWindow
-  private readonly configManager: ConfigManager
-  private readonly flowService: FlowService
+  private responseText = ''
+  private transcript = ''
+  private error = ''
 
-  /** Accumulated audio chunks from the renderer while push-to-talk is held */
-  private pendingAudioChunks: Buffer[] = []
+  /** Conversation history — sent with every Claude request */
+  private history: Message[] = []
 
-  constructor(options: CompanionManagerOptions) {
-    this.panelWindow = options.panelWindow
-    this.overlayWindow = options.overlayWindow
-    this.configManager = options.configManager
-    this.flowService = new FlowService()
+  /** Audio chunks collected while PTT is held */
+  private audioChunks: Buffer[] = []
 
-    // Give the TTS service a reference to the panel window for audio playback
-    setTtsPanelWindow(options.panelWindow)
+  constructor(
+    private readonly panelWindow: BrowserWindow,
+    private readonly overlayWindow: BrowserWindow,
+  ) {
+    setTtsWindow(panelWindow)
+    this.registerIpc()
   }
 
   // ---------------------------------------------------------------------------
-  // Public API
+  // PTT events (called by HotkeyManager)
   // ---------------------------------------------------------------------------
 
-  onHotkeyPress(): void {
+  onPress(): void {
     if (this.state !== 'idle') return
-    this.pendingAudioChunks = []
-    this.transitionTo('listening')
-    this.broadcast(IPC.HOTKEY.PRESS)
+    this.audioChunks = []
+    this.transcript = ''
+    this.responseText = ''
+    this.error = ''
+    this.setState('listening')
+    this.broadcast(IPC.HOTKEY_PRESS)
   }
 
-  onHotkeyRelease(): void {
+  onRelease(): void {
     if (this.state !== 'listening') return
-    this.transitionTo('transcribing')
-    this.broadcast(IPC.HOTKEY.RELEASE)
+    this.setState('processing')
+    this.broadcast(IPC.HOTKEY_RELEASE)
 
-    this.runProcessingPipeline().catch((err: unknown) => {
+    this.runPipeline().catch((err: unknown) => {
       const msg = err instanceof Error ? err.message : String(err)
-      console.error('[CompanionManager] pipeline error:', msg)
-      this.transitionToError(msg)
+      console.error('[companion] pipeline error:', msg)
+      this.error = msg
+      this.setState('idle')
     })
   }
 
-  onAudioChunk(wavBase64: string): void {
+  /** Called by audio IPC handler when renderer sends a chunk */
+  onAudioChunk(base64: string): void {
     if (this.state !== 'listening') return
-    this.pendingAudioChunks.push(Buffer.from(wavBase64, 'base64'))
+    this.audioChunks.push(Buffer.from(base64, 'base64'))
   }
 
   reset(): void {
-    this.lastErrorMessage = ''
-    this.pendingAudioChunks = []
-    this.transitionTo('idle')
-    // Also hide any lingering overlay
-    if (!this.overlayWindow.isDestroyed()) {
-      this.overlayWindow.webContents.send(IPC.OVERLAY.HIDE)
-      this.overlayWindow.hide()
-    }
-  }
-
-  getStatus(): CompanionStatus {
-    const profile = this.configManager.getStoredProfile()
-    const language = profile?.language ?? 'sw'
-    const flowContext = this.flowService.getCurrentContext(language)
-
-    return {
-      state: this.state,
-      label: this.getLabelEn(this.state),
-      label_sw: this.getLabelSw(this.state),
-      activeFlowId: flowContext?.flowId,
-      activeFlowStep: flowContext?.currentStep,
-      errorMessage: this.lastErrorMessage || undefined,
-    }
+    this.audioChunks = []
+    this.history = []
+    this.responseText = ''
+    this.transcript = ''
+    this.error = ''
+    this.setState('idle')
+    this.hideOverlay()
   }
 
   // ---------------------------------------------------------------------------
-  // IPC handler registration
+  // Core pipeline — transcribe → screenshot → Claude stream → TTS → overlay
   // ---------------------------------------------------------------------------
 
-  registerIpcHandlers(): void {
-    ipcMain.handle(IPC.COMPANION.GET_STATUS, () => this.getStatus())
+  private async runPipeline(): Promise<void> {
+    const proxy = getProxyUrl()
 
-    // Panel reset button calls this
-    ipcMain.handle(IPC.COMPANION.RESET, () => this.reset())
+    // 1. Transcribe audio (non-fatal if it fails)
+    if (this.audioChunks.length > 0) {
+      const wav = Buffer.concat(this.audioChunks)
+      this.audioChunks = []
+      this.transcript = await transcribeAudio(wav, proxy)
+      console.info('[companion] transcript:', this.transcript)
+    }
 
-    ipcMain.handle(IPC.VISION.REQUEST, async (_, userQuery: string) => {
-      return await this.performVisionGuidance(userQuery)
+    // 2. Screenshot
+    const screenshot = await captureScreen()
+
+    // 3. Stream Claude response — each chunk goes to the panel UI in real-time
+    this.responseText = ''
+    const { text, point } = await streamGuidance({
+      screenshotBase64: screenshot,
+      transcript: this.transcript,
+      history: this.history,
+      proxyUrl: proxy,
+      onChunk: (chunk) => {
+        this.responseText += chunk
+        // Send each chunk to renderer so text types in progressively
+        if (!this.panelWindow.isDestroyed()) {
+          this.panelWindow.webContents.send(IPC.CLAUDE_CHUNK, chunk)
+        }
+      },
     })
+
+    // 4. Update conversation history (cap at MAX_HISTORY turns)
+    this.history.push(
+      { role: 'user', content: this.transcript || '(screenshot only)' },
+      { role: 'assistant', content: text },
+    )
+    if (this.history.length > MAX_HISTORY * 2) {
+      this.history = this.history.slice(-MAX_HISTORY * 2)
+    }
+
+    this.panelWindow.webContents.send(IPC.CLAUDE_DONE)
+
+    // 5. Show overlay cursor if Claude pointed at something
+    if (point) this.showOverlayPoint(point)
+
+    // 6. TTS
+    this.setState('responding')
+    await speak(text, proxy)
+
+    // 7. Done — back to idle
+    this.setState('idle')
+
+    // Auto-hide overlay after 8 seconds
+    setTimeout(() => this.hideOverlay(), 8_000)
   }
 
   // ---------------------------------------------------------------------------
-  // Core pipeline: transcribe → vision → TTS → overlay
+  // Overlay helpers
   // ---------------------------------------------------------------------------
 
-  private async runProcessingPipeline(): Promise<void> {
-    const profile = this.configManager.getStoredProfile()
-    const language = profile?.language ?? 'sw'
-
-    // Step 1: Transcribe audio (if captured)
-    let userQuery = ''
-    if (this.pendingAudioChunks.length > 0) {
-      const combinedBuffer = Buffer.concat(this.pendingAudioChunks)
-      this.pendingAudioChunks = []
-
-      try {
-        const { transcribeAudio } = await import('../services/transcription/whisper')
-        userQuery = await transcribeAudio(combinedBuffer)
-        this.broadcast(IPC.TRANSCRIPTION.RESULT, userQuery)
-      } catch (err) {
-        // Transcription failure is non-fatal — continue with empty query
-        console.warn('[CompanionManager] Transcription failed, proceeding without text:', err)
-      }
-    }
-
-    // Step 2: Vision guidance
-    this.transitionTo('processing')
-    const guidanceResult = await this.performVisionGuidance(userQuery)
-
-    // Step 3: Show on overlay
-    if (!this.overlayWindow.isDestroyed()) {
-      this.overlayWindow.webContents.send(IPC.OVERLAY.SET_TEXT, guidanceResult.text)
-      this.overlayWindow.webContents.send(IPC.OVERLAY.SHOW)
-      this.overlayWindow.show()
-
-      if (guidanceResult.points.length > 0) {
-        this.overlayWindow.webContents.send(IPC.OVERLAY.POINT, guidanceResult.points[0])
-      }
-    }
-
-    // Step 4: Push to panel
-    this.broadcast(IPC.VISION.RESULT, guidanceResult)
-
-    // Step 5: Speak
-    this.transitionTo('speaking')
-    await speak(guidanceResult.text, language)
-
-    // Step 6: Done
-    this.transitionTo('idle')
-
-    setTimeout(() => {
-      if (!this.overlayWindow.isDestroyed()) {
-        this.overlayWindow.webContents.send(IPC.OVERLAY.HIDE)
-      }
-    }, 8_000)
+  private showOverlayPoint(point: PointTarget): void {
+    if (this.overlayWindow.isDestroyed()) return
+    this.overlayWindow.webContents.send(IPC.OVERLAY_POINT, point)
+    this.overlayWindow.webContents.send(IPC.OVERLAY_TEXT, this.responseText)
+    this.overlayWindow.show()
   }
 
-  private async performVisionGuidance(userQuery: string): Promise<GuidanceResult> {
-    const profile = this.configManager.getStoredProfile()
-    const language = profile?.language ?? 'sw'
-    const flowContext = this.flowService.getCurrentContext(language)
-
-    const screenshotBase64 = await captureScreenshot()
-    const screenshotBuffer = Buffer.from(screenshotBase64, 'base64')
-
-    const context = flowContext ?? this.buildDefaultContext(language, userQuery)
-    return await getGuidance(screenshotBuffer, userQuery, context)
-  }
-
-  private buildDefaultContext(language: 'sw' | 'en', userQuery: string): FlowContext {
-    const profile = this.configManager.getStoredProfile()
-    return {
-      flowId: 'none',
-      flowName: language === 'sw' ? 'Msaada wa jumla' : 'General assistance',
-      currentStep: 0,
-      totalSteps: 0,
-      stepInstruction: userQuery,
-      language,
-      orgCustomInstructions: profile?.customInstructions ?? '',
-    }
+  private hideOverlay(): void {
+    if (this.overlayWindow.isDestroyed()) return
+    this.overlayWindow.webContents.send(IPC.OVERLAY_HIDE)
+    this.overlayWindow.hide()
   }
 
   // ---------------------------------------------------------------------------
   // State machine
   // ---------------------------------------------------------------------------
 
-  private transitionTo(newState: CompanionState): void {
-    console.info(`[CompanionManager] ${this.state} → ${newState}`)
-    this.state = newState
-    this.broadcast(IPC.COMPANION.STATE_CHANGE, this.getStatus())
+  private setState(s: CompanionState): void {
+    console.info(`[companion] ${this.state} → ${s}`)
+    this.state = s
+    this.broadcastStatus()
   }
 
-  private transitionToError(message: string): void {
-    this.lastErrorMessage = message
-    this.transitionTo('error')
+  getStatus(): CompanionStatus {
+    return {
+      state: this.state,
+      responseText: this.responseText,
+      transcript: this.transcript,
+      error: this.error,
+    }
   }
 
-  private broadcast(channel: string, payload?: unknown): void {
+  private broadcastStatus(): void {
+    const status = this.getStatus()
     for (const win of [this.panelWindow, this.overlayWindow]) {
-      if (!win.isDestroyed()) win.webContents.send(channel, payload)
+      if (!win.isDestroyed()) win.webContents.send(IPC.STATUS, status)
     }
   }
 
-  private getLabelEn(state: CompanionState): string {
-    const m: Record<CompanionState, string> = {
-      idle: 'Ready', listening: 'Listening…', transcribing: 'Transcribing…',
-      processing: 'Thinking…', speaking: 'Speaking…', error: 'Error',
+  private broadcast(channel: string): void {
+    for (const win of [this.panelWindow, this.overlayWindow]) {
+      if (!win.isDestroyed()) win.webContents.send(channel)
     }
-    return m[state]
   }
 
-  private getLabelSw(state: CompanionState): string {
-    const m: Record<CompanionState, string> = {
-      idle: 'Tayari', listening: 'Sikilizando…', transcribing: 'Inabadilisha sauti…',
-      processing: 'Inafikiria…', speaking: 'Inasema…', error: 'Hitilafu',
-    }
-    return m[state]
+  // ---------------------------------------------------------------------------
+  // IPC handlers
+  // ---------------------------------------------------------------------------
+
+  private registerIpc(): void {
+    ipcMain.handle(IPC.GET_STATUS, () => this.getStatus())
+    ipcMain.handle(IPC.RESET, () => this.reset())
+    ipcMain.on(IPC.AUDIO_CHUNK, (_, base64: string) => this.onAudioChunk(base64))
+    ipcMain.on(IPC.AUDIO_STOP, () => { /* audio stop acknowledged */ })
   }
 }
