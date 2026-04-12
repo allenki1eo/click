@@ -3,13 +3,13 @@
  *
  * Mirrors clicky's worker exactly: 3 routes, API keys never leave the server.
  *
- *   POST /chat            → Anthropic Claude (streaming SSE)
+ *   POST /chat            → Claude via OpenRouter (streaming SSE, OpenAI-compatible)
  *   POST /tts             → ElevenLabs text-to-speech
  *   POST /transcribe-token → AssemblyAI short-lived token
  */
 
 interface Env {
-  ANTHROPIC_API_KEY: string
+  OPENROUTER_API_KEY: string
   ELEVENLABS_API_KEY: string
   ELEVENLABS_VOICE_ID: string   // default voice, e.g. "21m00Tcm4TlvDq8ikWAM"
   ASSEMBLYAI_API_KEY: string
@@ -48,18 +48,19 @@ export default {
 }
 
 // ---------------------------------------------------------------------------
-// /chat — Claude streaming (SSE passthrough)
+// /chat — Claude via OpenRouter (OpenAI-compatible SSE passthrough)
 // ---------------------------------------------------------------------------
 
 async function handleChat(request: Request, env: Env): Promise<Response> {
   const body = await request.text()
 
-  const upstream = await fetch('https://api.anthropic.com/v1/messages', {
+  const upstream = await fetch('https://openrouter.ai/api/v1/chat/completions', {
     method: 'POST',
     headers: {
-      'x-api-key': env.ANTHROPIC_API_KEY,
-      'anthropic-version': '2023-06-01',
+      'Authorization': `Bearer ${env.OPENROUTER_API_KEY}`,
       'content-type': 'application/json',
+      'HTTP-Referer': 'https://github.com/allenki1eo/click',
+      'X-Title': 'Mwongozo',
     },
     body,
   })

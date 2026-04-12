@@ -71,31 +71,30 @@ export async function streamGuidance(opts: {
 }): Promise<{ text: string; point: PointTarget | null }> {
   const { screenshotBase64, transcript, history, proxyUrl, onChunk } = opts
 
-  // Build messages: history (text only) + current turn (image + text)
-  const messages: object[] = history.map((m) => ({
-    role: m.role,
-    content: [{ type: 'text', text: m.content }],
-  }))
-
-  messages.push({
-    role: 'user',
-    content: [
-      {
-        type: 'image',
-        source: { type: 'base64', media_type: 'image/jpeg', data: screenshotBase64 },
-      },
-      { type: 'text', text: transcript || 'What should I do next?' },
-    ],
-  })
+  // Build messages in OpenAI format (OpenRouter-compatible)
+  // History messages are text-only; current turn includes the screenshot
+  const messages: object[] = [
+    { role: 'system', content: SYSTEM_PROMPT },
+    ...history.map((m) => ({ role: m.role, content: m.content })),
+    {
+      role: 'user',
+      content: [
+        {
+          type: 'image_url',
+          image_url: { url: `data:image/jpeg;base64,${screenshotBase64}` },
+        },
+        { type: 'text', text: transcript || 'What should I do next?' },
+      ],
+    },
+  ]
 
   const response = await (net.fetch as typeof fetch)(`${proxyUrl}/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      model: 'claude-sonnet-4-20250514',
+      model: 'anthropic/claude-3.5-sonnet',
       max_tokens: 1024,
       stream: true,
-      system: SYSTEM_PROMPT,
       messages,
     }),
   })
@@ -104,7 +103,7 @@ export async function streamGuidance(opts: {
     throw new Error(`Claude proxy error ${response.status}: ${await response.text()}`)
   }
 
-  // Read SSE stream token-by-token
+  // Read SSE stream token-by-token (OpenAI-compatible format)
   const reader = response.body!.getReader()
   const decoder = new TextDecoder()
   let buffer = ''
@@ -125,13 +124,11 @@ export async function streamGuidance(opts: {
 
       try {
         const json = JSON.parse(data)
-        // Anthropic SSE format: content_block_delta → text_delta
-        if (json.type === 'content_block_delta' && json.delta?.type === 'text_delta') {
-          const chunk: string = json.delta.text ?? ''
-          if (chunk) {
-            fullText += chunk
-            onChunk(chunk)
-          }
+        // OpenAI SSE format: choices[0].delta.content
+        const chunk: string = json.choices?.[0]?.delta?.content ?? ''
+        if (chunk) {
+          fullText += chunk
+          onChunk(chunk)
         }
       } catch {
         // skip malformed lines
