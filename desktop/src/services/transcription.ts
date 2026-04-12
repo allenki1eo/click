@@ -32,7 +32,7 @@ export async function transcribeAudio(wavBuffer: Buffer, proxyUrl: string): Prom
         authorization: token,
         'content-type': 'application/octet-stream',
       },
-      body: wavBuffer,
+      body: new Uint8Array(wavBuffer),
     })
     if (!uploadRes.ok) throw new Error(`upload error ${uploadRes.status}`)
     const { upload_url } = await uploadRes.json() as { upload_url: string }

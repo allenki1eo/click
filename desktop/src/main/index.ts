@@ -10,7 +10,6 @@ import { CompanionManager } from './companion'
 import { HotkeyManager } from './hotkey'
 import { TrayManager } from './tray'
 import { createOverlayWindow, resizeOverlayToScreen } from './overlay'
-import { IPC } from '../shared/ipc'
 
 const PRELOAD = join(__dirname, '../preload/index.js')
 

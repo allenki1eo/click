@@ -3,8 +3,7 @@
  * Full-screen transparent window, always on top, never steals focus.
  */
 
-import { BrowserWindow, screen, ipcMain } from 'electron'
-import { IPC } from '../shared/ipc'
+import { BrowserWindow, screen } from 'electron'
 
 export function createOverlayWindow(preload: string): BrowserWindow {
   const { bounds } = screen.getPrimaryDisplay()
