@@ -16,12 +16,18 @@
  *  3. Log which model was used for analytics
  */
 
-import { ipcMain } from 'electron'
-import { IPC } from '../shared/ipc'
+import { net } from 'electron'
 import type { GuidanceResult, FlowContext, PointTarget } from '../shared/types'
 
-// Proxy URL is read from electron-store at runtime — see ConfigManager
-let proxyUrl = 'https://mwongozo-proxy.allenkileo7.workers.dev'
+// Use electron.net.fetch instead of Node's global fetch.
+// On Windows, Node's undici-based fetch bypasses the system network stack
+// and can fail silently. electron.net uses Chromium's stack which respects
+// system proxies, corporate certificates, and Windows networking properly.
+const electronFetch = net.fetch.bind(net) as typeof fetch
+
+// Proxy URL — set at startup by main/index.ts from ConfigManager.
+// Default to local wrangler dev server; change to deployed URL for production.
+let proxyUrl = 'http://localhost:8787'
 
 export function setProxyUrl(url: string): void {
   proxyUrl = url
@@ -35,18 +41,15 @@ async function fetchWithTimeout(url: string, options: RequestInit, timeoutMs = 2
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), timeoutMs)
   try {
-    return await fetch(url, { ...options, signal: controller.signal })
+    return await electronFetch(url, { ...options, signal: controller.signal })
   } catch (err) {
     if ((err as { name?: string }).name === 'AbortError') {
-      throw new Error(`Request timed out after ${timeoutMs / 1000}s — check proxy connectivity`)
+      throw new Error(`Request timed out after ${timeoutMs / 1000}s — is the proxy running?`)
     }
-    // Normalise raw network errors (ECONNREFUSED, ERR_NAME_NOT_RESOLVED, etc.)
-    // into something a non-technical user can understand.
     const msg = err instanceof Error ? err.message : String(err)
-    if (msg.includes('ECONNREFUSED') || msg.includes('ERR_NAME_NOT_RESOLVED') || msg.includes('fetch failed')) {
-      throw new Error('Haiwezi kufikia seva (proxy unreachable). Angalia muunganisho wako wa internet.')
-    }
-    throw err
+    // Log the real cause so it shows up in the dev console for debugging
+    console.error('[vision] fetch error:', msg, (err as { cause?: unknown })?.cause ?? '')
+    throw new Error(`Proxy unreachable (${proxyUrl}): ${msg}`)
   } finally {
     clearTimeout(timer)
   }

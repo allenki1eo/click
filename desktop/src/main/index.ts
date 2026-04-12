@@ -20,6 +20,8 @@ import { ConfigManager } from './config'
 import { registerScreenshotHandlers } from './screenshot'
 import { registerAudioHandlers } from './audio'
 import { IPC } from '../shared/ipc'
+import { setProxyUrl } from '../services/vision'
+import { setTranscriptionProxyUrl } from '../services/transcription/whisper'
 
 // ---------------------------------------------------------------------------
 // Window references — kept module-level so managers can reach them
@@ -173,6 +175,14 @@ app.whenReady().then(async () => {
   // Wire up managers — order matters: config before companion, tray last
   const configManager = new ConfigManager()
   await configManager.init()
+
+  // Wire the proxy URL from config into the service modules.
+  // Must happen before CompanionManager is created so the first
+  // request already uses the correct URL.
+  const proxyUrl = configManager.getProxyUrl()
+  setProxyUrl(proxyUrl)
+  setTranscriptionProxyUrl(proxyUrl)
+  console.info('[main] Using proxy:', proxyUrl)
 
   const companionManager = new CompanionManager({
     panelWindow,

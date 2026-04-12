@@ -12,31 +12,33 @@
  * Phase 2 TODO: Add local whisper.cpp via node native addon for full offline use.
  */
 
-// Proxy URL — updated at runtime by vision.ts's setProxyUrl
-let proxyUrl = 'https://mwongozo-proxy.allenkileo7.workers.dev'
+import { net } from 'electron'
+
+const electronFetch = net.fetch.bind(net) as typeof fetch
+
+// Proxy URL — set at startup by main/index.ts from ConfigManager
+let proxyUrl = 'http://localhost:8787'
 
 export function setTranscriptionProxyUrl(url: string): void {
   proxyUrl = url
 }
 
 // ---------------------------------------------------------------------------
-// Fetch with timeout — prevents hanging when proxy is unreachable
+// Fetch with timeout — uses electron.net for proper Windows networking
 // ---------------------------------------------------------------------------
 
 async function fetchWithTimeout(url: string, options: RequestInit, timeoutMs = 15_000): Promise<Response> {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), timeoutMs)
   try {
-    return await fetch(url, { ...options, signal: controller.signal })
+    return await electronFetch(url, { ...options, signal: controller.signal })
   } catch (err) {
     if ((err as { name?: string }).name === 'AbortError') {
-      throw new Error(`Transcription request timed out after ${timeoutMs / 1000}s`)
+      throw new Error(`Transcription timed out after ${timeoutMs / 1000}s`)
     }
     const msg = err instanceof Error ? err.message : String(err)
-    if (msg.includes('ECONNREFUSED') || msg.includes('ERR_NAME_NOT_RESOLVED') || msg.includes('fetch failed')) {
-      throw new Error('Proxy unreachable — transcription skipped')
-    }
-    throw err
+    console.error('[transcription] fetch error:', msg, (err as { cause?: unknown })?.cause ?? '')
+    throw new Error(`Proxy unreachable (${proxyUrl}): ${msg}`)
   } finally {
     clearTimeout(timer)
   }

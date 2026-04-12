@@ -54,7 +54,7 @@ export class ConfigManager {
       encryptionKey: 'mwongozo-local-key-v1',
       defaults: {
         orgProfile: null,
-        proxyUrl: 'https://mwongozo-proxy.allenkileo7.workers.dev'
+        proxyUrl: 'http://localhost:8787'
       }
     })
   }
