@@ -122,7 +122,7 @@ export default {
 // ---------------------------------------------------------------------------
 
 const HF_QWEN_URL =
-  'https://api-inference.huggingface.co/models/Qwen/Qwen2.5-VL-7B-Instruct/v1/chat/completions'
+  'https://router.huggingface.co/hf-inference/v1/chat/completions'
 
 async function handleQwenVision(request: Request, env: Env): Promise<Response> {
   if (!env.HF_TOKEN) {
