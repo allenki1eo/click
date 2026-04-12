@@ -25,10 +25,12 @@
  */
 
 interface Env {
-  // Vision — HuggingFace token (free at huggingface.co/settings/tokens)
-  HF_TOKEN: string
-  // Vision fallback — Anthropic Claude Sonnet (optional, improves accuracy)
+  // Vision primary — OpenRouter key (free at openrouter.ai)
+  OPENROUTER_API_KEY: string
+  // Vision fallback — Anthropic Claude Sonnet (optional)
   ANTHROPIC_API_KEY: string
+  // HuggingFace token (kept for future use)
+  HF_TOKEN: string
 
   // TTS — no keys needed for edge-tts or Piper, but Piper needs a server URL
   /** URL of your self-hosted Piper TTS HTTP server, e.g. https://piper.example.com */
@@ -110,55 +112,52 @@ export default {
 }
 
 // ---------------------------------------------------------------------------
-// Vision: Qwen2.5-VL-7B via HuggingFace Inference API (primary — free)
+// Vision: Llama 3.2 11B Vision via OpenRouter (primary — free)
 //
-// Model: Qwen/Qwen2.5-VL-7B-Instruct
-//   - Free with any HuggingFace account token
-//   - Strong at UI understanding, form fields, button detection
-//   - 7B size runs on HF serverless infrastructure
+// Model: meta-llama/llama-3.2-11b-vision-instruct:free
+//   - Free tier on OpenRouter (openrouter.ai — sign up, no credit card)
+//   - Strong at reading UI elements, buttons, forms on screenshots
+//   - OpenAI-compatible request format
 //
-// Get your token: https://huggingface.co/settings/tokens
-// Set secret:     wrangler secret put HF_TOKEN
+// Get your key: https://openrouter.ai/keys
+// Set in .dev.vars: OPENROUTER_API_KEY=sk-or-...
 // ---------------------------------------------------------------------------
 
-const HF_QWEN_URL =
-  'https://router.huggingface.co/hf-inference/v1/chat/completions'
-
 async function handleQwenVision(request: Request, env: Env): Promise<Response> {
-  if (!env.HF_TOKEN) {
+  if (!env.OPENROUTER_API_KEY) {
     return corsResponse(
-      JSON.stringify({ error: 'HF_TOKEN secret not set. Add it with: wrangler secret put HF_TOKEN' }),
+      JSON.stringify({ error: 'OPENROUTER_API_KEY secret not set. Get a free key at openrouter.ai/keys' }),
       { status: 500, headers: { 'content-type': 'application/json' } }
     )
   }
 
-  // Parse the body from the desktop client and rewrite the model field
-  // to the exact HF model ID (desktop sends the generic name)
   const incomingBody = await request.json() as {
     messages: unknown[]
     max_tokens?: number
     temperature?: number
   }
 
-  const hfBody = {
-    model: 'Qwen/Qwen2.5-VL-7B-Instruct',
+  const body = {
+    model: 'meta-llama/llama-3.2-11b-vision-instruct:free',
     messages: incomingBody.messages,
     max_tokens: incomingBody.max_tokens ?? 512,
     temperature: incomingBody.temperature ?? 0.3
   }
 
-  const response = await fetch(HF_QWEN_URL, {
+  const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
     method: 'POST',
     headers: {
-      'Authorization': `Bearer ${env.HF_TOKEN}`,
-      'Content-Type': 'application/json'
+      'Authorization': `Bearer ${env.OPENROUTER_API_KEY}`,
+      'Content-Type': 'application/json',
+      'HTTP-Referer': 'https://mwongozo.app',
+      'X-Title': 'Mwongozo'
     },
-    body: JSON.stringify(hfBody)
+    body: JSON.stringify(body)
   })
 
   if (!response.ok) {
     const errorBody = await response.text()
-    console.error(`[/vision/qwen] HuggingFace error ${response.status}: ${errorBody}`)
+    console.error(`[/vision/qwen] OpenRouter error ${response.status}: ${errorBody}`)
     return corsResponse(errorBody, {
       status: response.status,
       headers: { 'content-type': 'application/json' }
