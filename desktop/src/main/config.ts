@@ -28,8 +28,8 @@ const DEMO_ORG_PROFILE: OrgProfile = {
   orgName: 'Demo Organisation',
   logoUrl: '',
   flowAccess: ['tra-vat-filing', 'tra-paye', 'brela-registration', 'zssf-contribution', 'nhif-registration'],
-  language: 'sw',
-  customInstructions: 'This is a demo environment. Help the user navigate Tanzanian government portals.',
+  language: 'en',
+  customInstructions: 'General-purpose demo. Help the user with whatever software or website is on their screen. Identify UI elements, explain what to click, and guide them step by step.',
   analyticsEnabled: false,
   activationCode: DEMO_ORG_CODE
 }
@@ -63,14 +63,21 @@ export class ConfigManager {
     this.currentProfile = this.store.get('orgProfile', null)
     console.info('[ConfigManager] Loaded stored profile:', this.currentProfile?.orgName ?? '(none)')
 
-    // Migration: reset stale placeholder proxy URLs that were stored before
-    // the real deployed URL was known. Any URL that isn't a valid http(s) URL
-    // pointing to an actual host gets replaced with the current default.
+    // Migration: reset stale placeholder proxy URL
     const storedProxy = this.store.get('proxyUrl', '')
     const staleUrls = ['https://mwongozo-proxy.workers.dev', '']
     if (staleUrls.some((s) => storedProxy === s)) {
       this.store.set('proxyUrl', 'http://localhost:8787')
       console.info('[ConfigManager] Migrated stale proxy URL → http://localhost:8787')
+    }
+
+    // Migration: refresh stored demo profile if it has the old Swahili-only config
+    // so the updated general-purpose English profile is picked up automatically.
+    const stored = this.currentProfile
+    if (stored?.activationCode === DEMO_ORG_CODE && stored.language !== DEMO_ORG_PROFILE.language) {
+      this.store.set('orgProfile', DEMO_ORG_PROFILE)
+      this.currentProfile = DEMO_ORG_PROFILE
+      console.info('[ConfigManager] Refreshed demo profile to latest config')
     }
   }
 

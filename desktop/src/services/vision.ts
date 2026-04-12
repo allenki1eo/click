@@ -61,30 +61,34 @@ async function fetchWithTimeout(url: string, options: RequestInit, timeoutMs = 2
 
 function buildSystemPrompt(context: FlowContext): string {
   const language = context.language === 'sw' ? 'Swahili' : 'English'
-  const stepInfo = context.totalSteps > 0
-    ? `CURRENT STEP: ${context.currentStep} of ${context.totalSteps}\nSTEP INSTRUCTION: ${context.stepInstruction}`
-    : 'No active flow — provide general navigation assistance.'
+  const hasActiveFlow = context.totalSteps > 0
+  const stepInfo = hasActiveFlow
+    ? `CURRENT FLOW: ${context.flowName}
+CURRENT STEP: ${context.currentStep} of ${context.totalSteps}
+STEP INSTRUCTION: ${context.stepInstruction}`
+    : `CURRENT FLOW: General assistance
+USER QUERY: ${context.stepInstruction || 'Help me with what is on my screen.'}`
 
-  return `You are Mwongozo, an AI navigation guide helping users navigate Tanzanian government portals and business software. You are knowledgeable about TRA IDARS, BRELA, ZSSF, NHIF, and common business software used in Tanzania.
+  return `You are Mwongozo, an AI screen assistant. You can see a screenshot of the user's screen and must help them with whatever software or website is visible — browsers, desktop apps, forms, dashboards, anything.
 
-LANGUAGE: Respond in ${language}. Use clear, simple language appropriate for a professional office environment.
+LANGUAGE: Respond in ${language}.
 
-CURRENT FLOW: ${context.flowName}
 ${stepInfo}
 
-${context.orgCustomInstructions ? `ORGANISATION CONTEXT: ${context.orgCustomInstructions}\n` : ''}
+${context.orgCustomInstructions ? `CONTEXT: ${context.orgCustomInstructions}\n` : ''}
 RULES:
-1. Look at the screenshot carefully. Identify the current state of the screen.
-2. Give ONE clear, concise instruction for what to do next.
-3. If you can see the exact element to click, embed a POINT tag: [POINT:x:y:label:screen0]
-4. Do not overwhelm the user. One action at a time.
-5. If the user seems stuck or there is an error visible on screen, acknowledge it and help them fix it.
-6. Keep responses under 3 sentences.
-7. If the screen matches the expected state for the next step, advance automatically.
+1. Study the screenshot carefully. Identify exactly what app/website is visible and its current state.
+2. Give ONE short, specific instruction for what the user should do next.
+3. If you can pinpoint the exact button, field, or link to interact with, add a POINT tag at the very end: [POINT:x:y:label:screen0] where x and y are the pixel coordinates of that element in the screenshot.
+4. One action per response — do not list multiple steps.
+5. If there is an error visible on screen, explain it and say how to fix it.
+6. Maximum 2 sentences.
 
-RESPONSE FORMAT:
-- Text instruction (in ${language})
-- Optional: [POINT:x:y:label:screen0] at the END of the response`
+POINT tag format: [POINT:x:y:label:screen0]
+  x = horizontal pixel position from left edge
+  y = vertical pixel position from top edge
+  label = short name of the element (e.g. "Submit", "Username field")
+Only include the POINT tag if you are confident about the element's location.`
 }
 
 // ---------------------------------------------------------------------------
