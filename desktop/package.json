@@ -13,9 +13,11 @@
     "package:mac": "npm run build && electron-builder --mac"
   },
   "dependencies": {
+    "@electron-toolkit/utils": "^3.0.0",
     "electron-store": "^8.1.0"
   },
   "devDependencies": {
+    "@electron-toolkit/tsconfig": "^1.0.1",
     "@types/node": "^20.11.0",
     "@types/react": "^18.2.0",
     "@types/react-dom": "^18.2.0",

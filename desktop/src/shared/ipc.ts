@@ -41,7 +41,9 @@ export const IPC = {
     /** send → main broadcasts CompanionStatus whenever state transitions */
     STATE_CHANGE: 'COMPANION:STATE_CHANGE',
     /** invoke() → CompanionStatus */
-    GET_STATUS: 'COMPANION:GET_STATUS'
+    GET_STATUS: 'COMPANION:GET_STATUS',
+    /** invoke() → void — reset from error state back to idle */
+    RESET: 'COMPANION:RESET'
   },
 
   // ---------------------------------------------------------------------------
@@ -89,7 +91,15 @@ export const IPC = {
     /** invoke(text: string) → void — main calls TTS and plays audio */
     SPEAK: 'TTS:SPEAK',
     /** send → main broadcasts when TTS playback finishes */
-    DONE: 'TTS:DONE'
+    DONE: 'TTS:DONE',
+    /** send(base64mp3: string) → main asks renderer to play audio via Web Audio API */
+    PLAY_AUDIO: 'TTS:PLAY_AUDIO',
+    /** send → renderer notifies main that Web Audio playback finished */
+    AUDIO_DONE: 'TTS:AUDIO_DONE',
+    /** send({ text, language }) → main asks renderer to use Web Speech API (offline fallback) */
+    WEB_SPEECH: 'TTS:WEB_SPEECH',
+    /** send → renderer notifies main that Web Speech playback finished */
+    WEB_SPEECH_DONE: 'TTS:WEB_SPEECH_DONE'
   },
 
   // ---------------------------------------------------------------------------

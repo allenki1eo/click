@@ -6,7 +6,7 @@
  * State transitions:
  *   idle ──(hotkeyPress)──► listening
  *   listening ──(hotkeyRelease)──► transcribing
- *   transcribing ──(transcriptionResult)──► processing
+ *   transcribing ──(done)──► processing
  *   processing ──(guidanceReady)──► speaking
  *   speaking ──(ttsDone)──► idle
  *   * ──(error)──► error
@@ -25,7 +25,7 @@ import type { ConfigManager } from './config'
 import { captureScreenshot } from './screenshot'
 import { FlowService } from '../services/flows'
 import { getGuidance } from '../services/vision'
-import { speak } from '../services/tts/kokoro'
+import { speak, setTtsPanelWindow } from '../services/tts/kokoro'
 
 interface CompanionManagerOptions {
   panelWindow: BrowserWindow
@@ -35,12 +35,13 @@ interface CompanionManagerOptions {
 
 export class CompanionManager {
   private state: CompanionState = 'idle'
+  private lastErrorMessage = ''
   private readonly panelWindow: BrowserWindow
   private readonly overlayWindow: BrowserWindow
   private readonly configManager: ConfigManager
   private readonly flowService: FlowService
 
-  /** Accumulated audio WAV chunks from the renderer while push-to-talk is held */
+  /** Accumulated audio chunks from the renderer while push-to-talk is held */
   private pendingAudioChunks: Buffer[] = []
 
   constructor(options: CompanionManagerOptions) {
@@ -48,18 +49,19 @@ export class CompanionManager {
     this.overlayWindow = options.overlayWindow
     this.configManager = options.configManager
     this.flowService = new FlowService()
+
+    // Give the TTS service a reference to the panel window for audio playback
+    setTtsPanelWindow(options.panelWindow)
   }
 
   // ---------------------------------------------------------------------------
-  // Public API (called by HotkeyManager and audio handlers)
+  // Public API
   // ---------------------------------------------------------------------------
 
   onHotkeyPress(): void {
     if (this.state !== 'idle') return
     this.pendingAudioChunks = []
     this.transitionTo('listening')
-
-    // Notify both windows so UI can update immediately
     this.broadcast(IPC.HOTKEY.PRESS)
   }
 
@@ -68,10 +70,10 @@ export class CompanionManager {
     this.transitionTo('transcribing')
     this.broadcast(IPC.HOTKEY.RELEASE)
 
-    // Kick off the async processing pipeline
-    this.runProcessingPipeline().catch((err) => {
-      console.error('[CompanionManager] pipeline error:', err)
-      this.transitionTo('error')
+    this.runProcessingPipeline().catch((err: unknown) => {
+      const msg = err instanceof Error ? err.message : String(err)
+      console.error('[CompanionManager] pipeline error:', msg)
+      this.transitionToError(msg)
     })
   }
 
@@ -81,8 +83,14 @@ export class CompanionManager {
   }
 
   reset(): void {
-    this.transitionTo('idle')
+    this.lastErrorMessage = ''
     this.pendingAudioChunks = []
+    this.transitionTo('idle')
+    // Also hide any lingering overlay
+    if (!this.overlayWindow.isDestroyed()) {
+      this.overlayWindow.webContents.send(IPC.OVERLAY.HIDE)
+      this.overlayWindow.hide()
+    }
   }
 
   getStatus(): CompanionStatus {
@@ -95,7 +103,8 @@ export class CompanionManager {
       label: this.getLabelEn(this.state),
       label_sw: this.getLabelSw(this.state),
       activeFlowId: flowContext?.flowId,
-      activeFlowStep: flowContext?.currentStep
+      activeFlowStep: flowContext?.currentStep,
+      errorMessage: this.lastErrorMessage || undefined,
     }
   }
 
@@ -106,61 +115,68 @@ export class CompanionManager {
   registerIpcHandlers(): void {
     ipcMain.handle(IPC.COMPANION.GET_STATUS, () => this.getStatus())
 
+    // Panel reset button calls this
+    ipcMain.handle(IPC.COMPANION.RESET, () => this.reset())
+
     ipcMain.handle(IPC.VISION.REQUEST, async (_, userQuery: string) => {
       return await this.performVisionGuidance(userQuery)
     })
   }
 
   // ---------------------------------------------------------------------------
-  // Core pipeline: transcribe → screenshot → vision → TTS → overlay
+  // Core pipeline: transcribe → vision → TTS → overlay
   // ---------------------------------------------------------------------------
 
   private async runProcessingPipeline(): Promise<void> {
     const profile = this.configManager.getStoredProfile()
     const language = profile?.language ?? 'sw'
 
-    // Step 1: Transcribe audio (if any was captured)
+    // Step 1: Transcribe audio (if captured)
     let userQuery = ''
     if (this.pendingAudioChunks.length > 0) {
-      const combinedWav = Buffer.concat(this.pendingAudioChunks)
+      const combinedBuffer = Buffer.concat(this.pendingAudioChunks)
       this.pendingAudioChunks = []
 
-      const { transcribeAudio } = await import('../services/transcription/whisper')
-      userQuery = await transcribeAudio(combinedWav)
-
-      // Broadcast transcription so the panel can show what was heard
-      this.broadcast(IPC.TRANSCRIPTION.RESULT, userQuery)
+      try {
+        const { transcribeAudio } = await import('../services/transcription/whisper')
+        userQuery = await transcribeAudio(combinedBuffer)
+        this.broadcast(IPC.TRANSCRIPTION.RESULT, userQuery)
+      } catch (err) {
+        // Transcription failure is non-fatal — continue with empty query
+        console.warn('[CompanionManager] Transcription failed, proceeding without text:', err)
+      }
     }
 
-    // Step 2: Transition to processing while we call vision
+    // Step 2: Vision guidance
     this.transitionTo('processing')
-
     const guidanceResult = await this.performVisionGuidance(userQuery)
 
-    // Step 3: Show guidance on the overlay
-    this.overlayWindow.webContents.send(IPC.OVERLAY.SET_TEXT, guidanceResult.text)
-    this.overlayWindow.webContents.send(IPC.OVERLAY.SHOW)
-    this.overlayWindow.show()
+    // Step 3: Show on overlay
+    if (!this.overlayWindow.isDestroyed()) {
+      this.overlayWindow.webContents.send(IPC.OVERLAY.SET_TEXT, guidanceResult.text)
+      this.overlayWindow.webContents.send(IPC.OVERLAY.SHOW)
+      this.overlayWindow.show()
 
-    if (guidanceResult.points.length > 0) {
-      const firstPoint = guidanceResult.points[0]
-      this.overlayWindow.webContents.send(IPC.OVERLAY.POINT, firstPoint)
+      if (guidanceResult.points.length > 0) {
+        this.overlayWindow.webContents.send(IPC.OVERLAY.POINT, guidanceResult.points[0])
+      }
     }
 
-    // Step 4: Broadcast guidance result to panel
+    // Step 4: Push to panel
     this.broadcast(IPC.VISION.RESULT, guidanceResult)
 
-    // Step 5: Speak the guidance text via TTS
+    // Step 5: Speak
     this.transitionTo('speaking')
     await speak(guidanceResult.text, language)
 
-    // Step 6: Return to idle
+    // Step 6: Done
     this.transitionTo('idle')
 
-    // Optionally auto-hide the overlay after a few seconds
     setTimeout(() => {
-      this.overlayWindow.webContents.send(IPC.OVERLAY.HIDE)
-    }, 8000)
+      if (!this.overlayWindow.isDestroyed()) {
+        this.overlayWindow.webContents.send(IPC.OVERLAY.HIDE)
+      }
+    }, 8_000)
   }
 
   private async performVisionGuidance(userQuery: string): Promise<GuidanceResult> {
@@ -168,11 +184,11 @@ export class CompanionManager {
     const language = profile?.language ?? 'sw'
     const flowContext = this.flowService.getCurrentContext(language)
 
-    // Capture primary screen — user is shown a tray indicator during this
     const screenshotBase64 = await captureScreenshot()
     const screenshotBuffer = Buffer.from(screenshotBase64, 'base64')
 
-    return await getGuidance(screenshotBuffer, userQuery, flowContext ?? this.buildDefaultContext(language, userQuery))
+    const context = flowContext ?? this.buildDefaultContext(language, userQuery)
+    return await getGuidance(screenshotBuffer, userQuery, context)
   }
 
   private buildDefaultContext(language: 'sw' | 'en', userQuery: string): FlowContext {
@@ -184,55 +200,44 @@ export class CompanionManager {
       totalSteps: 0,
       stepInstruction: userQuery,
       language,
-      orgCustomInstructions: profile?.customInstructions ?? ''
+      orgCustomInstructions: profile?.customInstructions ?? '',
     }
   }
 
   // ---------------------------------------------------------------------------
-  // State machine helpers
+  // State machine
   // ---------------------------------------------------------------------------
 
   private transitionTo(newState: CompanionState): void {
-    const previousState = this.state
+    console.info(`[CompanionManager] ${this.state} → ${newState}`)
     this.state = newState
-    console.info(`[CompanionManager] ${previousState} → ${newState}`)
-
-    const status = this.getStatus()
-    this.broadcast(IPC.COMPANION.STATE_CHANGE, status)
+    this.broadcast(IPC.COMPANION.STATE_CHANGE, this.getStatus())
   }
 
-  /** Send an IPC event to all renderer windows */
+  private transitionToError(message: string): void {
+    this.lastErrorMessage = message
+    this.transitionTo('error')
+  }
+
   private broadcast(channel: string, payload?: unknown): void {
-    const windows = [this.panelWindow, this.overlayWindow]
-    for (const win of windows) {
-      if (!win.isDestroyed()) {
-        win.webContents.send(channel, payload)
-      }
+    for (const win of [this.panelWindow, this.overlayWindow]) {
+      if (!win.isDestroyed()) win.webContents.send(channel, payload)
     }
   }
 
   private getLabelEn(state: CompanionState): string {
-    const labels: Record<CompanionState, string> = {
-      idle: 'Ready',
-      listening: 'Listening...',
-      transcribing: 'Transcribing...',
-      processing: 'Thinking...',
-      speaking: 'Speaking...',
-      error: 'Error'
+    const m: Record<CompanionState, string> = {
+      idle: 'Ready', listening: 'Listening…', transcribing: 'Transcribing…',
+      processing: 'Thinking…', speaking: 'Speaking…', error: 'Error',
     }
-    return labels[state]
+    return m[state]
   }
 
   private getLabelSw(state: CompanionState): string {
-    const labels: Record<CompanionState, string> = {
-      idle: 'Tayari',
-      listening: 'Sikilizando...',
-      transcribing: 'Inabadilisha sauti...',
-      processing: 'Inafikiria...',
-      speaking: 'Inasema...',
-      error: 'Hitilafu'
+    const m: Record<CompanionState, string> = {
+      idle: 'Tayari', listening: 'Sikilizando…', transcribing: 'Inabadilisha sauti…',
+      processing: 'Inafikiria…', speaking: 'Inasema…', error: 'Hitilafu',
     }
-    return labels[state]
+    return m[state]
   }
 }
-

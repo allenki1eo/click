@@ -6,77 +6,70 @@
  * Uses Electron's globalShortcut API to listen for hotkeys even when
  * the app window is not focused — essential for a tray companion.
  *
- * Default hotkey: Ctrl+Shift (both keys held) on Windows/Linux
- *                 Cmd+Shift on macOS
+ * Hotkey: Ctrl+Shift+Space (Windows/Linux) / Cmd+Shift+Space (macOS)
  *
- * We register two shortcuts:
- *   - The combined shortcut fires onHotkeyPress on first keydown
- *   - We track release via a timer (globalShortcut can't detect keyup)
+ * NOTE: Electron globalShortcut requires at least one non-modifier key.
+ * "Control+Shift" alone is invalid and silently fails to register.
+ * Space is unambiguous and unlikely to conflict with other apps.
  *
- * TODO: For production, replace with iohook for true keydown/keyup events.
- * globalShortcut fires repeatedly while held, so we debounce the press.
+ * Push-to-talk mechanic:
+ *   - First fire  → onHotkeyPress  (start listening)
+ *   - Key release → onHotkeyRelease (stop + process)
+ *
+ * globalShortcut fires repeatedly while held (~30ms interval) with no
+ * keyup event. We simulate release with a debounce timer: when the
+ * shortcut stops firing for RELEASE_TIMEOUT_MS we treat it as released.
+ *
+ * TODO: Replace with iohook for true keydown/keyup events in production.
  */
 
-import { globalShortcut, BrowserWindow, app } from 'electron'
+import { globalShortcut, app } from 'electron'
 import type { CompanionManager } from './companion'
 
-const PTT_HOTKEY_WIN_LINUX = 'Control+Shift'
-const PTT_HOTKEY_MAC = 'Command+Shift'
-
-interface HotkeyManagerOptions {
-  companionManager: CompanionManager
-  panelWindow: BrowserWindow
-}
+const PTT_HOTKEY_WIN_LINUX = 'Control+Shift+Space'
+const PTT_HOTKEY_MAC = 'Command+Shift+Space'
 
 export class HotkeyManager {
   private readonly companionManager: CompanionManager
-  private readonly panelWindow: BrowserWindow
-
-  /** Whether PTT is currently considered "held" — prevents repeat fires */
   private isHeld = false
+  private releaseTimer: ReturnType<typeof setTimeout> | null = null
 
   /**
-   * Timer that simulates a keyup event.
-   * globalShortcut fires every ~30ms while held; we need to detect release.
-   * We reset this timer on each fire — when it fires without being reset,
-   * we treat it as a release.
+   * How long (ms) after the last shortcut fire before we consider the key
+   * released. Must be longer than the OS key-repeat interval (~30ms) but
+   * short enough to feel responsive. 200ms is the sweet spot.
    */
-  private releaseTimer: ReturnType<typeof setTimeout> | null = null
   private readonly RELEASE_TIMEOUT_MS = 200
 
-  constructor(options: HotkeyManagerOptions) {
-    this.companionManager = options.companionManager
-    this.panelWindow = options.panelWindow
+  constructor(companionManager: CompanionManager) {
+    this.companionManager = companionManager
     this.register()
-
-    // Clean up on quit
     app.on('will-quit', () => this.unregister())
   }
 
   private register(): void {
     const hotkey = process.platform === 'darwin' ? PTT_HOTKEY_MAC : PTT_HOTKEY_WIN_LINUX
 
-    const registered = globalShortcut.register(hotkey, () => {
-      this.onHotkeyFired()
-    })
+    const ok = globalShortcut.register(hotkey, () => this.onFired())
 
-    if (!registered) {
-      console.error(`[HotkeyManager] Failed to register hotkey "${hotkey}" — it may be in use by another app`)
+    if (!ok) {
+      // Log clearly — a silent failure here means PTT simply never works
+      console.error(
+        `[HotkeyManager] Failed to register "${hotkey}". ` +
+        `Another app may have claimed it. PTT will not work.`
+      )
     } else {
-      console.info(`[HotkeyManager] Registered PTT hotkey: ${hotkey}`)
+      console.info(`[HotkeyManager] PTT hotkey registered: ${hotkey}`)
     }
   }
 
-  private onHotkeyFired(): void {
+  private onFired(): void {
     if (!this.isHeld) {
-      // First fire — treat as keydown
       this.isHeld = true
       this.companionManager.onHotkeyPress()
     }
 
-    // Reset the release timer on every fire.
-    // When the user releases the keys, globalShortcut stops firing and the
-    // timer expires, which we treat as keyup.
+    // Reset the release timer on every repeated fire.
     if (this.releaseTimer) clearTimeout(this.releaseTimer)
     this.releaseTimer = setTimeout(() => {
       if (this.isHeld) {

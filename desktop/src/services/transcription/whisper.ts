@@ -19,6 +19,29 @@ export function setTranscriptionProxyUrl(url: string): void {
   proxyUrl = url
 }
 
+// ---------------------------------------------------------------------------
+// Fetch with timeout — prevents hanging when proxy is unreachable
+// ---------------------------------------------------------------------------
+
+async function fetchWithTimeout(url: string, options: RequestInit, timeoutMs = 15_000): Promise<Response> {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  try {
+    return await fetch(url, { ...options, signal: controller.signal })
+  } catch (err) {
+    if ((err as { name?: string }).name === 'AbortError') {
+      throw new Error(`Transcription request timed out after ${timeoutMs / 1000}s`)
+    }
+    const msg = err instanceof Error ? err.message : String(err)
+    if (msg.includes('ECONNREFUSED') || msg.includes('ERR_NAME_NOT_RESOLVED') || msg.includes('fetch failed')) {
+      throw new Error('Proxy unreachable — transcription skipped')
+    }
+    throw err
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
 /**
  * Transcribe a WAV buffer to text.
  * Returns the transcript string, or empty string if transcription failed.
@@ -53,7 +76,7 @@ export async function transcribeAudio(wavBuffer: Buffer): Promise<string> {
 // ---------------------------------------------------------------------------
 
 async function transcribeViaProxy(wavBuffer: Buffer): Promise<string> {
-  const response = await fetch(`${proxyUrl}/transcribe`, {
+  const response = await fetchWithTimeout(`${proxyUrl}/transcribe`, {
     method: 'POST',
     headers: {
       'Content-Type': 'audio/wav',
@@ -76,7 +99,7 @@ async function transcribeViaProxy(wavBuffer: Buffer): Promise<string> {
 
 async function transcribeViaAssemblyAI(wavBuffer: Buffer): Promise<string> {
   // Step 1: Get a short-lived upload token from our proxy
-  const tokenResponse = await fetch(`${proxyUrl}/transcribe-token`, {
+  const tokenResponse = await fetchWithTimeout(`${proxyUrl}/transcribe-token`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' }
   })

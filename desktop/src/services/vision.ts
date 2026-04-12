@@ -28,6 +28,31 @@ export function setProxyUrl(url: string): void {
 }
 
 // ---------------------------------------------------------------------------
+// Fetch with timeout — prevents hanging indefinitely when proxy is unreachable
+// ---------------------------------------------------------------------------
+
+async function fetchWithTimeout(url: string, options: RequestInit, timeoutMs = 20_000): Promise<Response> {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  try {
+    return await fetch(url, { ...options, signal: controller.signal })
+  } catch (err) {
+    if ((err as { name?: string }).name === 'AbortError') {
+      throw new Error(`Request timed out after ${timeoutMs / 1000}s — check proxy connectivity`)
+    }
+    // Normalise raw network errors (ECONNREFUSED, ERR_NAME_NOT_RESOLVED, etc.)
+    // into something a non-technical user can understand.
+    const msg = err instanceof Error ? err.message : String(err)
+    if (msg.includes('ECONNREFUSED') || msg.includes('ERR_NAME_NOT_RESOLVED') || msg.includes('fetch failed')) {
+      throw new Error('Haiwezi kufikia seva (proxy unreachable). Angalia muunganisho wako wa internet.')
+    }
+    throw err
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+// ---------------------------------------------------------------------------
 // System prompt builder
 // ---------------------------------------------------------------------------
 
@@ -114,7 +139,7 @@ async function callQwenVision(
     temperature: 0.3
   }
 
-  const response = await fetch(`${proxyUrl}/vision/qwen`, {
+  const response = await fetchWithTimeout(`${proxyUrl}/vision/qwen`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(requestBody)
@@ -180,7 +205,7 @@ async function callClaudeVision(
     max_tokens: 512
   }
 
-  const response = await fetch(`${proxyUrl}/vision/claude`, {
+  const response = await fetchWithTimeout(`${proxyUrl}/vision/claude`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(requestBody)

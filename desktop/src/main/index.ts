@@ -182,7 +182,7 @@ app.whenReady().then(async () => {
 
   const trayManager = new TrayManager({ panelWindow, companionManager })
   const overlayManager = new OverlayManager(overlayWindow)
-  const hotkeyManager = new HotkeyManager({ companionManager, panelWindow })
+  const hotkeyManager = new HotkeyManager(companionManager)
 
   // Register IPC handlers
   registerWindowHandlers()
