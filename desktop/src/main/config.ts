@@ -62,6 +62,16 @@ export class ConfigManager {
   async init(): Promise<void> {
     this.currentProfile = this.store.get('orgProfile', null)
     console.info('[ConfigManager] Loaded stored profile:', this.currentProfile?.orgName ?? '(none)')
+
+    // Migration: reset stale placeholder proxy URLs that were stored before
+    // the real deployed URL was known. Any URL that isn't a valid http(s) URL
+    // pointing to an actual host gets replaced with the current default.
+    const storedProxy = this.store.get('proxyUrl', '')
+    const staleUrls = ['https://mwongozo-proxy.workers.dev', '']
+    if (staleUrls.some((s) => storedProxy === s)) {
+      this.store.set('proxyUrl', 'http://localhost:8787')
+      console.info('[ConfigManager] Migrated stale proxy URL → http://localhost:8787')
+    }
   }
 
   getStoredProfile(): OrgProfile | null {
