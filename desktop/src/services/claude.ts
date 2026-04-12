@@ -313,7 +313,7 @@ export async function streamGuidance(opts: {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      model: 'anthropic/claude-3.7-sonnet',
+      model: 'meta-llama/llama-3.2-11b-vision-instruct:free',
       max_tokens: 1024,
       stream: true,
       messages,
