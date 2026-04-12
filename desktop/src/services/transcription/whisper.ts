@@ -13,7 +13,7 @@
  */
 
 // Proxy URL — updated at runtime by vision.ts's setProxyUrl
-let proxyUrl = 'https://mwongozo-proxy.workers.dev'
+let proxyUrl = 'https://mwongozo-proxy.allenkileo7.workers.dev'
 
 export function setTranscriptionProxyUrl(url: string): void {
   proxyUrl = url

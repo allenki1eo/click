@@ -21,7 +21,7 @@ import { IPC } from '../shared/ipc'
 import type { GuidanceResult, FlowContext, PointTarget } from '../shared/types'
 
 // Proxy URL is read from electron-store at runtime — see ConfigManager
-let proxyUrl = 'https://mwongozo-proxy.workers.dev'
+let proxyUrl = 'https://mwongozo-proxy.allenkileo7.workers.dev'
 
 export function setProxyUrl(url: string): void {
   proxyUrl = url
