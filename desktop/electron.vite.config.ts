@@ -30,6 +30,7 @@ export default defineConfig({
         input: {
           panel:   resolve(__dirname, 'src/renderer/panel/index.html'),
           overlay: resolve(__dirname, 'src/renderer/overlay/index.html'),
+          orb:     resolve(__dirname, 'src/renderer/orb/index.html'),
         },
       },
     },
