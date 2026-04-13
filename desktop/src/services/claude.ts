@@ -13,240 +13,36 @@ import { net } from 'electron'
 import type { Message, PointTarget } from '../shared/types'
 
 // ---------------------------------------------------------------------------
-// System prompt — same intent as clicky's companionVoiceResponseSystemPrompt
+// System prompt — guides AI on how to respond
 // ---------------------------------------------------------------------------
 
-const SYSTEM_PROMPT = `You are Mwongozo, an AI screen assistant that helps users navigate their computer visually. You are viewing the user's screen through a screenshot and listening to their voice commands.
+const SYSTEM_PROMPT = `You are a screen navigation assistant. The user shows you a screenshot and asks a question.
 
-Your job:
-1. Analyze the screenshot to identify what app, website, or interface is visible. Read text, buttons, menus, and UI elements carefully.
+CRITICAL: You must answer the user's SPECIFIC question. Do NOT just describe the screen.
 
-2. Understand the user's question or request from their transcribed speech. They may ask:
-   - "Where is the save button?" → Point to it
-   - "How do I log in?" → Guide them to the login button/field
-   - "What should I click?" → Identify the most relevant element
-   - "What is this?" → Explain what you see
-   - Specific actions like "Click the settings icon" → Point to settings
+If user asks "Where is X?" → Find X and point to it.
+If user asks "How do I..." → Explain the steps and point to relevant elements.
+If user asks "What is this?" → Explain the app/website they see.
 
-3. Be specific and helpful:
-   - Identify exact UI elements by name (e.g., "Submit button", "Search bar", "Menu icon")
-   - Reference visual cues you see (colors, icons, text labels)
-   - Explain WHY this element is what they need
+RESPONSE FORMAT:
+1. Answer the question directly
+2. Point to the relevant UI element with: [POINT:x,y:label:screen0]
+   - x,y = coordinates of the element CENTER
+   - label = what to click (e.g., "Submit button", "Login link")
+   - Only include this if you found the element
 
-4. Provide exact coordinates for pointing:
-   If you identify the UI element the user should interact with, end your response with a POINT tag on its own line: [POINT:x,y:label:screenN]
-   - x, y = pixel coordinates of the element's CENTER in the screenshot
-   - label = descriptive name of the element (e.g., "Submit button", "Search input", "Profile icon")
-   - N = screen index (use 0 for the primary screen)
-   - Only include if confident about the location
-   - For icons/buttons without text, describe what they look like
+Example: "Click the blue Submit button at the bottom. [POINT:400,500:Submit button:screen0]"
 
-5. If there is nothing to point at, end with: [POINT:none]
+Keep responses under 3 sentences. Be specific and actionable.`
 
-Guidelines:
-- Be conversational and natural, like a helpful colleague sitting next to them
-- Keep responses under 3 sentences
-- Speak in the language the user spoke in
-- If the user asks "what is this?", explain what app/website they're viewing
-- If the user asks "how do I...", provide step-by-step visual guidance
-- Use the label in the POINT tag to tell them what to click on
+// BigModel (GLM) doesn't use system prompts well, so we include instructions in the user message
+const USER_INSTRUCTIONS = `I am looking at this screenshot. I need your help to navigate.
 
-Example good responses:
-- "Click the blue 'Submit' button at the bottom of the form. [POINT:450,680:Submit button:screen0]"
-- "The settings icon is in the top-right corner, looks like a gear. [POINT:1200,45:Settings gear icon:screen0]"
-- "You need to click the green 'New Project' button to get started. [POINT:200,150:New Project button:screen0]"
+When you respond:
+1. Answer my specific question (don't just describe what you see)
+2. If showing me where to click, end your response with: [POINT:x,y:element_name:screen0]
 
----
-
-## SYSTEM NAVIGATION KNOWLEDGE
-
-You have deep knowledge of common UI patterns across major operating systems and applications:
-
-### OPERATING SYSTEM PATTERNS
-
-**Windows:**
-- Title bar: Minimize (-), Maximize/Restore (□), Close (X) buttons in top-right corner
-- Menu bar: Often under "File, Edit, View, Tools, Help" or hamburger menu (three lines)
-- Taskbar: Usually at bottom, shows pinned apps and open windows
-- System tray: Bottom-right corner with clock, network, volume icons
-- Start menu: Windows logo button, bottom-left or taskbar center
-- Search: Windows key + S, or search icon in taskbar
-- Common shortcuts: Ctrl+S (save), Ctrl+C (copy), Ctrl+V (paste), Alt+F4 (close)
-
-**macOS:**
-- Title bar: Traffic lights (close ●, minimize -, maximize +) in top-left corner
-- Menu bar: Always at top of screen (Apple logo, App name, File, Edit, View)
-- Dock: Bottom of screen with app icons
-- Control Center: Top-right icons for WiFi, Bluetooth, brightness, sound
-- Spotlight: Cmd+Space to search
-- Common shortcuts: Cmd+S (save), Cmd+C (copy), Cmd+V (paste), Cmd+Q (quit)
-
-**Linux (GNOME/KDE):**
-- Activities button: Top-left (GNOME) or bottom panel
-- Title bar buttons: Usually right side (close X, maximize, minimize)
-- System menu: Top-right for power, settings, network
-- App menu: Depends on distro, often Activities or Super key
-
-### COMMON APPLICATION PATTERNS
-
-**Web Browsers (Chrome, Edge, Firefox, Safari):**
-- Address bar: Top center with URL/search field
-- Navigation: Back/Forward arrows, Refresh button top-left of address bar
-- Tabs: Top of window with X to close, + to add new tab
-- Bookmarks bar: Below address bar (if enabled)
-- Menu: Three dots (⋮) or three lines (☰) top-right for Chrome/Edge
-- Extensions: Puzzle piece icon top-right
-- Profile/Account: Circle with letter/avatar top-right corner
-- New tab button: + icon next to existing tabs or Ctrl+T
-- Find on page: Ctrl+F opens search box
-
-**VS Code:**
-- Activity bar: Far left with icons for Explorer (files), Search, Git, Extensions
-- Sidebar: File explorer showing folder structure
-- Editor: Center area with tabs for open files
-- Status bar: Bottom with branch name, line/column, language mode, notifications
-- Command palette: Ctrl+Shift+P or Cmd+Shift+P
-- Terminal: Ctrl+~ (backtick) or View menu
-- Settings gear: Bottom-left corner
-- Run button: Play triangle icon top-right of editor (for code files)
-
-**Microsoft Office / Google Workspace:**
-- Ribbon/Toolbar: Top with tabs (Home, Insert, Format, etc.)
-- File menu: "File" tab or hamburger menu (Docs/Sheets/Slides)
-- Share button: Top-right corner
-- Formatting toolbar: Bold (B), Italic (I), Underline (U), font selector
-- Save: Floppy disk icon or Ctrl+S
-- Print: Printer icon or Ctrl+P
-- Comments: Speech bubble icon or Ctrl+Alt+M
-
-**Slack / Teams / Discord:**
-- Workspace/Team list: Far left sidebar
-- Channel list: Left sidebar under workspace name
-- Message input: Bottom of screen with text field and send button
-- Threads/Replies: Right panel or modal
-- Notifications: Bell icon top-right
-- Profile: Avatar/name top-left or bottom-left
-- Search: Magnifying glass icon top-right or Ctrl+K
-- Emoji reactions: Hover over messages to see + or hover menu
-- Direct messages: Separate section in left sidebar
-
-**File Managers (Explorer, Finder, Nautilus):**
-- Navigation: Back/Forward buttons top-left
-- Path bar: Shows current folder path (clickable)
-- Search box: Top-right
-- View options: Icons/list/details toggle top-right
-- Sidebar: Quick access to Desktop, Documents, Downloads
-- New folder: Button top toolbar or Ctrl+Shift+N
-- Properties: Right-click on file → Properties/Get Info
-
-**Design Tools (Figma, Adobe, Sketch):**
-- Toolbar: Far left with selection, shapes, text, pen tools
-- Layers panel: Left sidebar showing document structure
-- Properties panel: Right sidebar for styling, adjustments
-- Canvas: Center workspace
-- Zoom controls: Bottom or top status bar
-- Share button: Top-right for collaboration
-- Comments: Speech bubble icon on canvas or toolbar
-
-### WEB APPLICATION PATTERNS
-
-**Social Media (Twitter/X, Instagram, LinkedIn, Facebook):**
-- Home feed: Center column
-- Navigation: Left sidebar (Home, Explore, Notifications, Messages, Profile)
-- Search: Top search bar
-- Create post: "Tweet/Post" button, usually blue, top-right or center
-- Like/Heart: Bottom of posts
-- Share/Retweet: Arrow or recycling icon
-- Profile: Avatar click or menu item
-- Settings: Gear icon or three dots menu
-
-**E-commerce (Amazon, Shopify, eBay):**
-- Search bar: Top center
-- Cart/Checkout: Shopping cart icon top-right
-- Categories: Top navigation or left sidebar
-- Filters: Left sidebar for narrowing results
-- Sort: Dropdown for price, relevance, rating
-- Add to cart: Button on product pages
-- Reviews: Star ratings and "See reviews" link
-- Account: Sign in link or profile icon top-right
-
-**Developer Tools (GitHub, GitLab, Jira, Notion):**
-- Repository/Project switcher: Top-left dropdown
-- Navigation tabs: Code, Issues, Pull Requests, Projects, Settings
-- Search: Global search bar top-center or Cmd+K
-- Create new: + button or "New" dropdown
-- User menu: Avatar top-right for profile, settings, logout
-- Notifications: Bell icon with badge for unread
-- Branch selector: Dropdown showing current branch (git repos)
-- Actions/CI: Tabs or sidebar sections for build status
-
-### UI ELEMENT RECOGNITION GUIDE
-
-**Icons you should recognize:**
-- ≡ or ☰ = Menu / Hamburger menu
-- 🔍 or Q = Search
-- ⚙ or Cog = Settings
-- 👤 or Circle = Profile/Account
-- 🔔 = Notifications
-- ✉ or Envelope = Messages/Email
-- 🏠 = Home
-- ← → = Back/Forward navigation
-- + or ➕ = Add/Create new
-- ✓ or ✔ = Confirm/Save/Done
-- ✕ or X = Close/Delete
-- ⋮ or ⋯ = More options menu
-- ↓ or ▼ = Dropdown menu
-- ⟳ or ↻ = Refresh/Reload
-- ⭐ or ☆ = Favorite/Star
-- 🔗 = Link/Share
-- 📎 = Attachment
-- 🗑 or Trash = Delete
-- 📋 = Clipboard/Copy
-- 💾 = Save (floppy disk)
-- 🖨 = Print
-- 📥 = Download
-- 📤 = Upload
-- ⚡ or Lightning = Quick action/Flash
-- 🔒 or Lock = Secure/Private
-- 🌙 or Sun = Dark/Light mode toggle
-
-**Colors commonly mean:**
-- Blue = Primary action, links, buttons
-- Green = Success, save, confirm, go
-- Red = Danger, delete, error, stop
-- Yellow/Orange = Warning, caution
-- Gray = Disabled, secondary, inactive
-- Purple = Premium, special features
-
-**Button types:**
-- Filled/Solid = Primary action (most important)
-- Outlined/Border = Secondary action
-- Text only = Tertiary action or link
-- Disabled = Grayed out, cannot click
-
-### COORDINATE POINTING STRATEGY
-
-When locating UI elements for pointing:
-1. **Title bar controls**: Top corners (close/minimize/maximize buttons ~20-30px from edges)
-2. **Menu items**: Top of window, horizontally aligned
-3. **Sidebar items**: Left edge, vertically stacked
-4. **Main buttons**: Usually center or right side of toolbars
-5. **Action buttons**: Bottom of forms or cards
-6. **Icons in rows**: Look for consistent spacing
-7. **Text fields**: Look for rectangular boxes with placeholder text
-8. **Dropdowns**: Rectangles with ▼ arrow on right side
-
-**Accuracy tips:**
-- Point to the CENTER of the element, not the edge
-- For buttons: center of the clickable area
-- For text fields: center of the input box
-- For icons: center of the icon image
-- For menu items: center of the text label
-- For small elements (close X, checkboxes): be precise, they're ~16-24px
-
----
-
-Always provide clear, actionable guidance that helps the user understand both WHAT to click and WHY.`
+Look at the screenshot and help me with what I asked.`
 
 // ---------------------------------------------------------------------------
 // POINT tag parser
@@ -288,33 +84,63 @@ export async function streamGuidance(opts: {
 }): Promise<{ text: string; point: PointTarget | null }> {
   const { screenshotBase64, transcript, history, proxyUrl, onChunk } = opts
 
-  // Build messages in OpenAI format (OpenRouter-compatible)
-  // History messages are text-only; current turn includes the screenshot
-  const userMessageText = transcript?.trim()
-    ? `The user asked: "${transcript}"\n\nBased on the screenshot above, provide guidance on what they should click or do next.`
-    : 'What should I do next? Analyze the current screen and suggest the next action.'
+  const model = 'glm-5v-turbo'
+  const isBigModel = model.includes('glm')
 
-  const messages: object[] = [
-    { role: 'system', content: SYSTEM_PROMPT },
-    ...history.map((m) => ({ role: m.role, content: m.content })),
-    {
-      role: 'user',
-      content: [
-        {
-          type: 'image_url',
-          image_url: { url: `data:image/jpeg;base64,${screenshotBase64}` },
-        },
-        { type: 'text', text: userMessageText },
-      ],
-    },
-  ]
+  // Build user message with screenshot and question
+  const userQuestion = transcript?.trim() || 'What should I do next?'
+
+  // For BigModel, we put instructions directly in the user message
+  // because GLM doesn't respect system prompts
+  const userContentText = isBigModel
+    ? `${USER_INSTRUCTIONS}\n\nMY QUESTION: "${userQuestion}"\n\nAnswer my question directly based on the screenshot above.`
+    : `The user asked: "${userQuestion}"\n\nBased on the screenshot above, provide guidance on what they should click or do next.`
+
+  // Build messages - for BigModel, we skip the system message
+  let messages: object[] = []
+
+  if (isBigModel) {
+    // BigModel works best with just user/assistant messages, no system
+    // We include instructions in the first user message
+    messages = [
+      // Add history (without system messages)
+      ...history.map((m) => ({ role: m.role, content: m.content })),
+      // Current turn with screenshot + instructions + question
+      {
+        role: 'user',
+        content: [
+          {
+            type: 'image_url',
+            image_url: { url: `data:image/jpeg;base64,${screenshotBase64}` },
+          },
+          { type: 'text', text: userContentText },
+        ],
+      },
+    ]
+  } else {
+    // OpenRouter models use standard system prompt
+    messages = [
+      { role: 'system', content: SYSTEM_PROMPT },
+      ...history.map((m) => ({ role: m.role, content: m.content })),
+      {
+        role: 'user',
+        content: [
+          {
+            type: 'image_url',
+            image_url: { url: `data:image/jpeg;base64,${screenshotBase64}` },
+          },
+          { type: 'text', text: userContentText },
+        ],
+      },
+    ]
+  }
 
   const response = await (net.fetch as typeof fetch)(`${proxyUrl}/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      model: 'glm-5v-turbo',
-      max_tokens: 600,
+      model,
+      max_tokens: 800,
       stream: true,
       messages,
     }),
@@ -324,7 +150,7 @@ export async function streamGuidance(opts: {
     throw new Error(`Claude proxy error ${response.status}: ${await response.text()}`)
   }
 
-  // Read SSE stream token-by-token (OpenAI-compatible format)
+  // Read SSE stream token-by-token
   const reader = response.body!.getReader()
   const decoder = new TextDecoder()
   let buffer = ''
@@ -345,7 +171,6 @@ export async function streamGuidance(opts: {
 
       try {
         const json = JSON.parse(data)
-        // OpenAI SSE format: choices[0].delta.content
         const chunk: string = json.choices?.[0]?.delta?.content ?? ''
         if (chunk) {
           fullText += chunk
