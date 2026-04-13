@@ -33,4 +33,5 @@ export const IPC = {
   // invoke channels (renderer → main, returns Promise)
   GET_STATUS:    'get-status',
   RESET:         'reset',
+  MANUAL_QUERY:  'query:manual',   // typed question from panel UI
 } as const

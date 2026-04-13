@@ -47,6 +47,9 @@ const api = {
   onOverlayPoint: (cb: (p: PointTarget) => void) => on(IPC.OVERLAY_POINT, cb),
   onOverlayText:  (cb: (t: string) => void) => on(IPC.OVERLAY_TEXT, cb),
   onOverlayHide:  (cb: () => void) => once(IPC.OVERLAY_HIDE, cb),
+
+  // Manual text query from the panel input field
+  submitQuery: (text: string): Promise<void> => ipcRenderer.invoke(IPC.MANUAL_QUERY, text),
 }
 
 contextBridge.exposeInMainWorld('api', api)
