@@ -119,12 +119,13 @@ function PttButton({
 // ---------------------------------------------------------------------------
 
 function ChatTab({
-  messages, streaming, liveTranscript, status, listening, textInput, theme, orbName,
+  messages, streaming, liveTranscript, transcribing, status, listening, textInput, theme, orbName,
   setTextInput, onPress, onRelease, onTextSubmit, onClear,
 }: {
   messages:      UIMessage[]
   streaming:     string
   liveTranscript:string
+  transcribing:  boolean
   status:        CompanionStatus
   listening:     boolean
   textInput:     string
@@ -277,7 +278,7 @@ function ChatTab({
       <div className="px-3 pb-3 pt-0.5">
         <PttButton
           listening={listening}
-          disabled={!isIdle && !listening}
+          disabled={(!isIdle && !listening) || transcribing}
           theme={theme}
           onPress={onPress}
           onRelease={onRelease}
@@ -457,8 +458,12 @@ export function App(): React.ReactElement {
   const [orbCfg,        setOrbCfg]         = useState<OrbConfig>({ name: 'Mwongozo', theme: '#10b981', personality: 'friendly' })
   const [proxyUrl,      setProxyUrlState]  = useState('http://localhost:8787')
 
-  const streamingRef    = useRef('')
-  const recognitionRef  = useRef<(InstanceType<typeof SpeechRecognition>) | null>(null)
+  const [transcribing,  setTranscribing]  = useState(false)
+
+  const streamingRef      = useRef('')
+  const mediaRecorderRef  = useRef<MediaRecorder | null>(null)
+  const audioChunksRef    = useRef<Blob[]>([])
+  const transcribingRef   = useRef(false)   // mirrors `transcribing` for stale-closure safety
 
   // ── bootstrap ──────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -473,11 +478,11 @@ export function App(): React.ReactElement {
       }),
       window.api.onHotkeyPress(() => {
         setListening(true)
-        startSpeechRecognition()
+        startRecording()
       }),
       window.api.onHotkeyRelease(() => {
         setListening(false)
-        stopSpeechRecognition()
+        stopRecording()
       }),
       window.api.onClaudeChunk((chunk) => {
         streamingRef.current += chunk
@@ -503,56 +508,76 @@ export function App(): React.ReactElement {
     return () => subs.forEach((u) => u())
   }, [])
 
-  // ── Web Speech API ─────────────────────────────────────────────────────────
+  // ── MediaRecorder-based voice input ───────────────────────────────────────
 
-  function startSpeechRecognition(): void {
-    const SpeechRec = (window.SpeechRecognition ?? (window as unknown as Record<string, typeof SpeechRecognition>).webkitSpeechRecognition) as (typeof SpeechRecognition) | undefined
-    if (!SpeechRec) {
-      console.warn('[panel] Web Speech API unavailable')
-      return
-    }
-    if (recognitionRef.current) { recognitionRef.current.abort() }
-
-    const rec = new SpeechRec()
-    rec.continuous      = true
-    rec.interimResults  = true
-    rec.lang            = ''   // use system language
-
-    let pendingTranscript = ''
-
-    rec.onresult = (event: SpeechRecognitionEvent) => {
-      let interim = ''
-      for (let i = event.resultIndex; i < event.results.length; i++) {
-        const res = event.results[i]
-        if (res.isFinal) {
-          pendingTranscript += res[0].transcript
-        } else {
-          interim += res[0].transcript
-        }
-      }
-      setLiveTranscript(pendingTranscript + interim)
-    }
-
-    rec.onend = () => {
-      const t = pendingTranscript.trim()
-      setLiveTranscript('')
-      recognitionRef.current = null
-      if (t) submitVoiceQuery(t)
-    }
-
-    rec.onerror = (e: SpeechRecognitionErrorEvent) => {
-      console.error('[panel] Speech recognition error:', e.error)
-      setLiveTranscript('')
-      recognitionRef.current = null
-    }
-
-    recognitionRef.current = rec
-    try { rec.start() } catch { /* already running */ }
+  /** Convert a Blob to a bare base64 string (no data-URL prefix). */
+  function blobToBase64(blob: Blob): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload  = () => resolve((reader.result as string).split(',')[1])
+      reader.onerror = reject
+      reader.readAsDataURL(blob)
+    })
   }
 
-  function stopSpeechRecognition(): void {
-    recognitionRef.current?.stop()
-    // don't null-out here — let onend fire and null it
+  async function startRecording(): Promise<void> {
+    // Don't start a new recording if one is already running or we're transcribing
+    if (mediaRecorderRef.current || transcribingRef.current) return
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+        ? 'audio/webm;codecs=opus'
+        : 'audio/webm'
+      const rec = new MediaRecorder(stream, { mimeType })
+      audioChunksRef.current = []
+
+      rec.ondataavailable = (e: BlobEvent) => {
+        if (e.data.size > 0) audioChunksRef.current.push(e.data)
+      }
+
+      rec.onstop = async () => {
+        // Release microphone immediately
+        stream.getTracks().forEach((t) => t.stop())
+        mediaRecorderRef.current = null
+
+        const blob = new Blob(audioChunksRef.current, { type: mimeType })
+        audioChunksRef.current = []
+
+        // Ignore suspiciously small blobs (< 1 KB = ~silence / accidental tap)
+        if (blob.size < 1024) { setLiveTranscript(''); return }
+
+        try {
+          transcribingRef.current = true
+          setTranscribing(true)
+          setLiveTranscript('Transcribing…')
+          const b64 = await blobToBase64(blob)
+          const transcript = await window.api.transcribeAudio(b64)
+          setLiveTranscript('')
+          if (transcript.trim()) submitVoiceQuery(transcript.trim())
+        } catch (err) {
+          console.error('[panel] Transcription failed:', err)
+          setLiveTranscript('')
+        } finally {
+          transcribingRef.current = false
+          setTranscribing(false)
+        }
+      }
+
+      rec.start()
+      mediaRecorderRef.current = rec
+    } catch (err) {
+      console.error('[panel] Mic access failed:', err)
+      setListening(false)
+    }
+  }
+
+  function stopRecording(): void {
+    const rec = mediaRecorderRef.current
+    if (rec && rec.state === 'recording') {
+      rec.stop() // triggers onstop asynchronously
+    } else {
+      mediaRecorderRef.current = null
+    }
   }
 
   function submitVoiceQuery(transcript: string): void {
@@ -565,14 +590,14 @@ export function App(): React.ReactElement {
   // ── PTT button handlers ────────────────────────────────────────────────────
 
   function handlePress(): void {
-    if (status.state !== 'idle') return
+    if (status.state !== 'idle' || transcribingRef.current) return
     setListening(true)
-    startSpeechRecognition()
+    startRecording()
   }
 
   function handleRelease(): void {
     setListening(false)
-    stopSpeechRecognition()
+    stopRecording()
   }
 
   // ── Text submit ────────────────────────────────────────────────────────────
@@ -677,6 +702,7 @@ export function App(): React.ReactElement {
           messages={messages}
           streaming={streaming}
           liveTranscript={liveTranscript}
+          transcribing={transcribing}
           status={status}
           listening={listening}
           textInput={textInput}

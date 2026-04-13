@@ -198,6 +198,20 @@ app.whenReady().then(() => {
   ipcMain.handle(IPC.GET_PROXY_URL, () => getProxyUrl())
   ipcMain.handle(IPC.SET_PROXY_URL, (_, url: string) => setProxyUrl(url))
 
+  // Voice transcription — receive base64 audio from renderer, forward to proxy
+  ipcMain.handle(IPC.TRANSCRIBE_AUDIO, async (_, b64: string): Promise<string> => {
+    const proxy = getProxyUrl()
+    const audioBuffer = Buffer.from(b64, 'base64')
+    const res = await fetch(`${proxy}/transcribe`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/octet-stream' },
+      body: audioBuffer,
+    })
+    const data = await res.json() as { text?: string; error?: string }
+    if (!res.ok || data.error) throw new Error(data.error ?? `Proxy error ${res.status}`)
+    return data.text ?? ''
+  })
+
   // Re-size overlay + reposition orb if display config changes
   app.on('browser-window-created', () => {
     resizeOverlayToScreen(overlayWindow)
