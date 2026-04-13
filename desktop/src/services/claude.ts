@@ -313,7 +313,7 @@ export async function streamGuidance(opts: {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      model: 'meta-llama/llama-3.2-11b-vision-instruct:free',
+      model: 'glm-5v-turbo',
       max_tokens: 600,
       stream: true,
       messages,

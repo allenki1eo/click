@@ -1,17 +1,27 @@
 /**
  * Mwongozo Proxy — Cloudflare Worker
  *
- * Mirrors clicky's worker exactly: 3 routes, API keys never leave the server.
+ * Routes:
+ * POST /chat → AI model (OpenRouter OR BigModel.cn)
+ * POST /tts → ElevenLabs text-to-speech
+ * POST /transcribe-token → AssemblyAI short-lived token
  *
- *   POST /chat            → Claude via OpenRouter (streaming SSE, OpenAI-compatible)
- *   POST /tts             → ElevenLabs text-to-speech
- *   POST /transcribe-token → AssemblyAI short-lived token
+ * Environment Variables:
+ * - OPENROUTER_API_KEY: For OpenRouter models
+ * - BIGMODEL_API_KEY: For GLM-5V-Turbo on BigModel.cn
+ * - ELEVENLABS_API_KEY: For text-to-speech
+ * - ELEVENLABS_VOICE_ID: Default voice ID
+ * - ASSEMBLYAI_API_KEY: For transcription
  */
 
 interface Env {
-  OPENROUTER_API_KEY: string
+  // AI Providers (at least one required)
+  OPENROUTER_API_KEY?: string
+  BIGMODEL_API_KEY?: string
+  // TTS
   ELEVENLABS_API_KEY: string
-  ELEVENLABS_VOICE_ID: string   // default voice, e.g. "21m00Tcm4TlvDq8ikWAM"
+  ELEVENLABS_VOICE_ID: string
+  // Transcription
   ASSEMBLYAI_API_KEY: string
 }
 
@@ -33,8 +43,8 @@ export default {
     const { pathname } = new URL(request.url)
 
     try {
-      if (pathname === '/chat')             return await handleChat(request, env)
-      if (pathname === '/tts')              return await handleTts(request, env)
+      if (pathname === '/chat') return await handleChat(request, env)
+      if (pathname === '/tts') return await handleTts(request, env)
       if (pathname === '/transcribe-token') return await handleTranscribeToken(env)
       return ok('Not found', { status: 404 })
     } catch (err) {
@@ -48,11 +58,31 @@ export default {
 }
 
 // ---------------------------------------------------------------------------
-// /chat — Claude via OpenRouter (OpenAI-compatible SSE passthrough)
+// /chat — Supports multiple AI providers
 // ---------------------------------------------------------------------------
 
 async function handleChat(request: Request, env: Env): Promise<Response> {
   const body = await request.text()
+  const parsed = JSON.parse(body)
+  const model = parsed.model || ''
+
+  // Route to appropriate provider based on model
+  if (model.includes('glm') || model.includes('bigmodel')) {
+    // BigModel.cn (Zhipu AI) - GLM series
+    return await handleBigModelChat(body, env)
+  } else {
+    // OpenRouter - default
+    return await handleOpenRouterChat(body, env)
+  }
+}
+
+async function handleOpenRouterChat(body: string, env: Env): Promise<Response> {
+  if (!env.OPENROUTER_API_KEY) {
+    return ok(JSON.stringify({ error: 'OPENROUTER_API_KEY not configured' }), {
+      status: 500,
+      headers: { 'content-type': 'application/json' },
+    })
+  }
 
   const upstream = await fetch('https://openrouter.ai/api/v1/chat/completions', {
     method: 'POST',
@@ -67,11 +97,10 @@ async function handleChat(request: Request, env: Env): Promise<Response> {
 
   if (!upstream.ok) {
     const err = await upstream.text()
-    console.error('/chat upstream error', upstream.status, err)
+    console.error('[OpenRouter] upstream error', upstream.status, err)
     return ok(err, { status: upstream.status, headers: { 'content-type': 'application/json' } })
   }
 
-  // Pass the SSE stream straight through — no buffering
   return new Response(upstream.body, {
     status: 200,
     headers: {
@@ -80,6 +109,77 @@ async function handleChat(request: Request, env: Env): Promise<Response> {
       'cache-control': 'no-cache',
     },
   })
+}
+
+async function handleBigModelChat(body: string, env: Env): Promise<Response> {
+  if (!env.BIGMODEL_API_KEY) {
+    return ok(JSON.stringify({ error: 'BIGMODEL_API_KEY not configured' }), {
+      status: 500,
+      headers: { 'content-type': 'application/json' },
+    })
+  }
+
+  const parsed = JSON.parse(body)
+
+  // BigModel.cn uses OpenAI-compatible format but different endpoint
+  const upstream = await fetch('https://open.bigmodel.cn/api/paas/v4/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${env.BIGMODEL_API_KEY}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: parsed.model || 'glm-5v-turbo',
+      messages: parsed.messages,
+      stream: parsed.stream ?? true,
+      // Enable thinking mode for better reasoning
+      thinking: { type: 'enabled' },
+      max_tokens: parsed.max_tokens ?? 1024,
+    }),
+  })
+
+  if (!upstream.ok) {
+    const err = await upstream.text()
+    console.error('[BigModel] upstream error', upstream.status, err)
+    return ok(err, { status: upstream.status, headers: { 'content-type': 'application/json' } })
+  }
+
+  // BigModel may not support streaming the same way - handle both cases
+  const contentType = upstream.headers.get('content-type') || ''
+
+  if (contentType.includes('text/event-stream')) {
+    // Streaming response
+    return new Response(upstream.body, {
+      status: 200,
+      headers: {
+        ...CORS,
+        'content-type': 'text/event-stream',
+        'cache-control': 'no-cache',
+      },
+    })
+  } else {
+    // Non-streaming - wrap in SSE format for compatibility
+    const json = await upstream.json()
+    const content = json.choices?.[0]?.message?.content || ''
+    const sseData = `data: ${JSON.stringify({ choices: [{ delta: { content } }] })}
+
+`
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(sseData))
+        controller.enqueue(new TextEncoder().encode('data: [DONE]\n\n'))
+        controller.close()
+      },
+    })
+    return new Response(stream, {
+      status: 200,
+      headers: {
+        ...CORS,
+        'content-type': 'text/event-stream',
+        'cache-control': 'no-cache',
+      },
+    })
+  }
 }
 
 // ---------------------------------------------------------------------------
