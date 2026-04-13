@@ -86,9 +86,14 @@ const server = http.createServer(async (req, res) => {
   }
 
   const pathname = url.parse(req.url).pathname;
-  let body = '';
-  req.on('data', chunk => body += chunk);
+
+  // Collect body as Buffer so we can handle both JSON and binary (audio) endpoints
+  const chunks = [];
+  req.on('data', chunk => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
   req.on('end', async () => {
+    const bodyBuffer = Buffer.concat(chunks);
+    const body = bodyBuffer.toString('utf8'); // string view for JSON endpoints
+
     try {
       if (pathname === '/chat') {
         await handleChat(body, res);
@@ -100,8 +105,8 @@ const server = http.createServer(async (req, res) => {
         return;
       }
 
-      if (pathname === '/transcribe-token') {
-        await handleTranscribeToken(res);
+      if (pathname === '/transcribe') {
+        await handleTranscribe(bodyBuffer, res);
         return;
       }
 
@@ -240,60 +245,104 @@ async function handleTTS(body, res) {
   res.end(Buffer.from(upstream.data, 'binary'));
 }
 
-// Transcribe token handler
-async function handleTranscribeToken(res) {
-  console.log('[transcribe-token] Checking ASSEMBLYAI_API_KEY...');
-  
+// Full transcription pipeline — upload audio, submit job, poll until done
+// The client POSTs raw audio bytes; the proxy handles all AssemblyAI API calls
+// using the server-side API key. This avoids exposing the key to the client and
+// fixes the previous bug where a streaming v3 token was incorrectly used for the
+// batch v2 REST API (they are completely different auth systems).
+async function handleTranscribe(audioBuffer, res) {
   if (!process.env.ASSEMBLYAI_API_KEY) {
-    console.error('[transcribe-token] ERROR: ASSEMBLYAI_API_KEY is not set!');
-    console.error('[transcribe-token] Please add ASSEMBLYAI_API_KEY to your .env file');
+    console.error('[transcribe] ASSEMBLYAI_API_KEY is not set — cannot transcribe');
     res.writeHead(500, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ 
-      error: 'ASSEMBLYAI_API_KEY not configured',
-      message: 'Add ASSEMBLYAI_API_KEY to proxy/.env file. Get one at https://www.assemblyai.com/app'
-    }));
+    res.end(JSON.stringify({ error: 'ASSEMBLYAI_API_KEY not configured. Add it to proxy/.env' }));
     return;
   }
 
-  console.log('[transcribe-token] Requesting token from AssemblyAI...');
-  console.log('[transcribe-token] API Key (first 8 chars):', process.env.ASSEMBLYAI_API_KEY.substring(0, 8) + '...');
+  if (!audioBuffer || audioBuffer.length === 0) {
+    res.writeHead(400, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'No audio data received', text: '' }));
+    return;
+  }
 
-  const options = {
-    hostname: 'streaming.assemblyai.com',
-    path: '/v3/token?expires_in_seconds=480',
-    method: 'GET',
-    protocol: 'https:',
-    headers: {
-      'Authorization': process.env.ASSEMBLYAI_API_KEY,
-    }
-  };
+  console.log(`[transcribe] Received ${audioBuffer.length} bytes of audio`);
 
   try {
-    const upstream = await proxyRequest(options);
-    console.log('[transcribe-token] AssemblyAI response status:', upstream.status);
-    
-    if (upstream.status >= 200 && upstream.status < 300) {
-      console.log('[transcribe-token] Token obtained successfully');
-      res.writeHead(upstream.status, { 'Content-Type': 'application/json' });
-      res.end(upstream.data);
-    } else {
-      console.error('[transcribe-token] ERROR: AssemblyAI returned', upstream.status);
-      console.error('[transcribe-token] Response:', upstream.data);
-      res.writeHead(upstream.status, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ 
-        error: `AssemblyAI error ${upstream.status}`,
-        details: upstream.data,
-        message: 'Check your ASSEMBLYAI_API_KEY is valid'
-      }));
+    // Step 1: Upload audio to AssemblyAI
+    const uploadResult = await proxyRequest({
+      hostname: 'api.assemblyai.com',
+      path: '/v2/upload',
+      method: 'POST',
+      protocol: 'https:',
+      headers: {
+        'Authorization': process.env.ASSEMBLYAI_API_KEY,
+        'Content-Type': 'application/octet-stream',
+        'Content-Length': audioBuffer.length,
+      }
+    }, audioBuffer);
+
+    if (uploadResult.status < 200 || uploadResult.status >= 300) {
+      throw new Error(`Upload failed (${uploadResult.status}): ${uploadResult.data}`);
     }
+    const { upload_url } = JSON.parse(uploadResult.data);
+    console.log('[transcribe] Audio uploaded successfully');
+
+    // Step 2: Submit transcription job
+    const txBody = JSON.stringify({ audio_url: upload_url });
+    const txResult = await proxyRequest({
+      hostname: 'api.assemblyai.com',
+      path: '/v2/transcript',
+      method: 'POST',
+      protocol: 'https:',
+      headers: {
+        'Authorization': process.env.ASSEMBLYAI_API_KEY,
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(txBody),
+      }
+    }, txBody);
+
+    if (txResult.status < 200 || txResult.status >= 300) {
+      throw new Error(`Transcript submit failed (${txResult.status}): ${txResult.data}`);
+    }
+    const { id } = JSON.parse(txResult.data);
+    console.log('[transcribe] Job submitted, ID:', id);
+
+    // Step 3: Poll until completed (max 20 × 1.5s = 30s)
+    for (let i = 0; i < 20; i++) {
+      await sleep(1500);
+      const pollResult = await proxyRequest({
+        hostname: 'api.assemblyai.com',
+        path: `/v2/transcript/${id}`,
+        method: 'GET',
+        protocol: 'https:',
+        headers: { 'Authorization': process.env.ASSEMBLYAI_API_KEY }
+      });
+
+      const data = JSON.parse(pollResult.data);
+      if (data.status === 'completed') {
+        const text = data.text?.trim() ?? '';
+        console.log('[transcribe] Completed:', text || '(empty)');
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ text }));
+        return;
+      }
+      if (data.status === 'error') {
+        throw new Error(`AssemblyAI error: ${data.error}`);
+      }
+      console.log(`[transcribe] Status: ${data.status} (${i + 1}/20)`);
+    }
+
+    throw new Error('Transcription timed out after 30s');
   } catch (err) {
-    console.error('[transcribe-token] ERROR:', err.message);
-    res.writeHead(500, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ 
-      error: err.message,
-      message: 'Failed to connect to AssemblyAI'
-    }));
+    console.error('[transcribe] FAILED:', err.message);
+    if (!res.headersSent) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: err.message, text: '' }));
+    }
   }
+}
+
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 server.listen(PORT, () => {
@@ -304,9 +353,9 @@ server.listen(PORT, () => {
   console.log('  - BIGMODEL_API_KEY - For BigModel.cn (GLM-5V-Turbo)');
   console.log('');
   console.log('Other services:');
-  console.log('  - ELEVENLABS_API_KEY');
+  console.log('  - ELEVENLABS_API_KEY - For text-to-speech');
   console.log('  - ELEVENLABS_VOICE_ID (optional, defaults to 21m00Tcm4TlvDq8ikWAM)');
-  console.log('  - ASSEMBLYAI_API_KEY');
+  console.log('  - ASSEMBLYAI_API_KEY - For voice transcription (POST /transcribe)');
   console.log('');
-  console.log('You can create a .env file in the proxy folder with these values.');
+  console.log('Copy proxy/.env.example to proxy/.env and fill in your API keys.');
 });
