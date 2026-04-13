@@ -1,9 +1,6 @@
 /**
- * Panel UI — mirrors CompanionPanelView.swift.
- *
- * Shows the current state, streams Claude's response token-by-token as it
- * types in (just like clicky's progressive text display), and has a PTT
- * button as a click alternative to the keyboard shortcut.
+ * Panel UI — streams Claude's response token-by-token and lets the user
+ * trigger queries either by voice (PTT) or by typing a question.
  */
 
 import React, { useEffect, useRef, useState } from 'react'
@@ -35,15 +32,9 @@ function Dot({ state }: { state: string }): React.ReactElement {
 // ---------------------------------------------------------------------------
 
 function PttButton({
-  listening,
-  disabled,
-  onPress,
-  onRelease,
+  listening, disabled, onPress, onRelease,
 }: {
-  listening: boolean
-  disabled: boolean
-  onPress: () => void
-  onRelease: () => void
+  listening: boolean; disabled: boolean; onPress: () => void; onRelease: () => void
 }): React.ReactElement {
   return (
     <button
@@ -81,7 +72,9 @@ export function App(): React.ReactElement {
   })
   const [streamedText, setStreamedText] = useState('')
   const [listening, setListening] = useState(false)
-  const recorder = useRef<MediaRecorder | null>(null)
+  const [textInput, setTextInput]   = useState('')
+  const recorder    = useRef<MediaRecorder | null>(null)
+  const textInputEl = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     window.api.getStatus().then(setStatus)
@@ -147,12 +140,22 @@ export function App(): React.ReactElement {
     setListening(false); stopMic()
   }
 
+  // Text query submit
+  async function handleTextSubmit(e: React.FormEvent): Promise<void> {
+    e.preventDefault()
+    const q = textInput.trim()
+    if (!q || status.state !== 'idle') return
+    setTextInput('')
+    setStreamedText('')
+    await window.api.submitQuery(q)
+  }
+
   // Audio playback
   async function playAudio(base64: string): Promise<void> {
-    const ctx = new AudioContext()
+    const ctx  = new AudioContext()
     const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0))
-    const buf = await ctx.decodeAudioData(bytes.buffer)
-    const src = ctx.createBufferSource()
+    const buf  = await ctx.decodeAudioData(bytes.buffer)
+    const src  = ctx.createBufferSource()
     src.buffer = buf
     src.connect(ctx.destination)
     return new Promise((res) => { src.onended = () => res(); src.start() })
@@ -164,7 +167,7 @@ export function App(): React.ReactElement {
       window.speechSynthesis.cancel()
       const u = new SpeechSynthesisUtterance(text)
       u.rate = 0.95
-      u.onend = () => res()
+      u.onend  = () => res()
       u.onerror = () => res()
       window.speechSynthesis.speak(u)
     })
@@ -172,6 +175,7 @@ export function App(): React.ReactElement {
 
   const { state, transcript, error } = status
   const display = streamedText || status.responseText
+  const isIdle  = state === 'idle'
 
   return (
     <div className="h-screen flex flex-col bg-[#0d1117] text-white select-none" style={{ fontFamily: 'system-ui, sans-serif' }}>
@@ -189,7 +193,7 @@ export function App(): React.ReactElement {
       </div>
 
       {/* Content */}
-      <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3">
+      <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3 min-h-0">
 
         {error && (
           <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-3 text-sm text-red-400">
@@ -211,11 +215,11 @@ export function App(): React.ReactElement {
             {display}
             {state === 'processing' && <span className="animate-pulse ml-0.5">▋</span>}
           </div>
-        ) : state === 'idle' && (
-          <div className="text-center py-10 text-gray-500 text-sm space-y-2">
+        ) : isIdle && (
+          <div className="text-center py-6 text-gray-500 text-sm space-y-2">
             <p className="text-3xl">🎙️</p>
             <p>Hold <kbd className="px-1.5 py-0.5 rounded bg-gray-700 text-xs font-mono">Ctrl+Shift+Space</kbd> and speak</p>
-            <p className="text-xs opacity-60">or use the button below</p>
+            <p className="text-xs opacity-60">or type your question below</p>
           </div>
         )}
 
@@ -230,11 +234,49 @@ export function App(): React.ReactElement {
         )}
       </div>
 
+      {/* Text input — lets user type when voice isn't working or for precise questions */}
+      <div className="px-4 pt-2 pb-1 border-t border-white/10">
+        <form onSubmit={handleTextSubmit} className="flex gap-2">
+          <input
+            ref={textInputEl}
+            type="text"
+            value={textInput}
+            onChange={(e) => setTextInput(e.target.value)}
+            disabled={!isIdle}
+            placeholder={isIdle ? 'Type a question and press Enter…' : state + '…'}
+            className="
+              flex-1 bg-[#161b22] border border-white/10 rounded-lg px-3 py-2
+              text-sm text-white placeholder-gray-600
+              focus:outline-none focus:border-green-500/60
+              disabled:opacity-40 disabled:cursor-not-allowed
+              transition-colors
+            "
+          />
+          <button
+            type="submit"
+            disabled={!isIdle || !textInput.trim()}
+            title="Send question"
+            className="
+              px-3 py-2 rounded-lg bg-green-600 text-white
+              hover:bg-green-500 active:scale-95
+              disabled:opacity-40 disabled:cursor-not-allowed
+              transition-all duration-150
+            "
+          >
+            {/* Paper-plane send icon */}
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="22" y1="2" x2="11" y2="13" />
+              <polygon points="22 2 15 22 11 13 2 9 22 2" />
+            </svg>
+          </button>
+        </form>
+      </div>
+
       {/* PTT button */}
-      <div className="px-4 pb-4 pt-2 border-t border-white/10">
+      <div className="px-4 pb-4 pt-1">
         <PttButton
           listening={listening}
-          disabled={state !== 'idle' && state !== 'listening'}
+          disabled={!isIdle && !listening}
           onPress={handlePress}
           onRelease={handleRelease}
         />

@@ -45,7 +45,7 @@ export default {
     try {
       if (pathname === '/chat') return await handleChat(request, env)
       if (pathname === '/tts') return await handleTts(request, env)
-      if (pathname === '/transcribe-token') return await handleTranscribeToken(env)
+      if (pathname === '/transcribe') return await handleTranscribe(request, env)
       return ok('Not found', { status: 404 })
     } catch (err) {
       console.error(`[${pathname}]`, err)
@@ -191,36 +191,87 @@ async function handleTts(request: Request, env: Env): Promise<Response> {
 }
 
 // ---------------------------------------------------------------------------
-// /transcribe-token — AssemblyAI short-lived token for WebSocket streaming
+// /transcribe — Full AssemblyAI pipeline: upload → submit → poll → return text
+// Client POSTs raw audio bytes; proxy handles all API calls with the server key.
 // ---------------------------------------------------------------------------
 
-async function handleTranscribeToken(env: Env): Promise<Response> {
+async function handleTranscribe(request: Request, env: Env): Promise<Response> {
   if (!env.ASSEMBLYAI_API_KEY) {
-    console.error('[transcribe-token] ERROR: ASSEMBLYAI_API_KEY not configured')
-    return ok(JSON.stringify({ error: 'ASSEMBLYAI_API_KEY not configured' }), {
+    return ok(JSON.stringify({ error: 'ASSEMBLYAI_API_KEY not configured. Add it to Worker secrets.' }), {
       status: 500,
       headers: { 'content-type': 'application/json' },
     })
   }
 
-  console.info('[transcribe-token] Requesting token from AssemblyAI...')
-  const upstream = await fetch(
-    'https://streaming.assemblyai.com/v3/token?expires_in_seconds=480',
-    { headers: { authorization: env.ASSEMBLYAI_API_KEY } }
-  )
-
-  if (!upstream.ok) {
-    const err = await upstream.text()
-    console.error('[transcribe-token] ERROR: AssemblyAI returned', upstream.status, err)
-    return ok(JSON.stringify({ error: `AssemblyAI error ${upstream.status}`, details: err }), {
-      status: upstream.status,
+  const audioBuffer = await request.arrayBuffer()
+  if (!audioBuffer.byteLength) {
+    return ok(JSON.stringify({ error: 'No audio data received', text: '' }), {
+      status: 400,
       headers: { 'content-type': 'application/json' },
     })
   }
+  console.info(`[transcribe] Received ${audioBuffer.byteLength} bytes`)
 
-  console.info('[transcribe-token] Token obtained successfully')
-  return ok(await upstream.text(), {
-    status: 200,
+  const auth = env.ASSEMBLYAI_API_KEY
+
+  // Step 1: Upload audio
+  const uploadRes = await fetch('https://api.assemblyai.com/v2/upload', {
+    method: 'POST',
+    headers: { authorization: auth, 'content-type': 'application/octet-stream' },
+    body: audioBuffer,
+  })
+  if (!uploadRes.ok) {
+    const err = await uploadRes.text()
+    return ok(JSON.stringify({ error: `Upload failed: ${err}`, text: '' }), {
+      status: 500,
+      headers: { 'content-type': 'application/json' },
+    })
+  }
+  const { upload_url } = await uploadRes.json() as { upload_url: string }
+  console.info('[transcribe] Audio uploaded')
+
+  // Step 2: Submit transcription job
+  const txRes = await fetch('https://api.assemblyai.com/v2/transcript', {
+    method: 'POST',
+    headers: { authorization: auth, 'content-type': 'application/json' },
+    body: JSON.stringify({ audio_url: upload_url }),
+  })
+  if (!txRes.ok) {
+    const err = await txRes.text()
+    return ok(JSON.stringify({ error: `Transcript submit failed: ${err}`, text: '' }), {
+      status: 500,
+      headers: { 'content-type': 'application/json' },
+    })
+  }
+  const { id } = await txRes.json() as { id: string }
+  console.info('[transcribe] Job submitted, ID:', id)
+
+  // Step 3: Poll until completed (max 20 × 1.5s = 30s)
+  for (let i = 0; i < 20; i++) {
+    await new Promise(r => setTimeout(r, 1500))
+    const poll = await fetch(`https://api.assemblyai.com/v2/transcript/${id}`, {
+      headers: { authorization: auth },
+    })
+    const data = await poll.json() as { status: string; text?: string; error?: string }
+    if (data.status === 'completed') {
+      const text = data.text?.trim() ?? ''
+      console.info('[transcribe] Completed:', text || '(empty)')
+      return ok(JSON.stringify({ text }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      })
+    }
+    if (data.status === 'error') {
+      return ok(JSON.stringify({ error: `AssemblyAI: ${data.error}`, text: '' }), {
+        status: 500,
+        headers: { 'content-type': 'application/json' },
+      })
+    }
+    console.info(`[transcribe] Status: ${data.status} (${i + 1}/20)`)
+  }
+
+  return ok(JSON.stringify({ error: 'Transcription timed out', text: '' }), {
+    status: 500,
     headers: { 'content-type': 'application/json' },
   })
 }

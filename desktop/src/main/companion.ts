@@ -1,13 +1,13 @@
 /**
- * CompanionManager — central state machine, mirrors CompanionManager.swift.
+ * CompanionManager — central state machine.
  *
- * States:
- *   idle       → user presses PTT  → listening
- *   listening  → user releases PTT → processing
- *   processing → Claude done       → responding
- *   responding → TTS done          → idle
+ * States: idle → listening → processing → responding → idle
  *
- * Conversation history: last 10 turns kept in memory (same as clicky).
+ * Two ways to trigger a query:
+ *  1. PTT (push-to-talk): records audio, transcribes, sends screenshot + text
+ *  2. Manual text (onManualQuery): skips audio, uses typed text directly
+ *
+ * Conversation history: last 10 turns kept in memory.
  */
 
 import { BrowserWindow, ipcMain } from 'electron'
@@ -19,18 +19,14 @@ import { speak, setTtsWindow } from '../services/tts'
 import { transcribeAudio } from '../services/transcription'
 import { getProxyUrl } from './config'
 
-const MAX_HISTORY = 10 // keep last 10 turns, same as clicky
+const MAX_HISTORY = 10
 
 export class CompanionManager {
   private state: CompanionState = 'idle'
   private responseText = ''
   private transcript = ''
   private error = ''
-
-  /** Conversation history — sent with every Claude request */
   private history: Message[] = []
-
-  /** Audio chunks collected while PTT is held */
   private audioChunks: Buffer[] = []
 
   constructor(
@@ -59,7 +55,6 @@ export class CompanionManager {
     if (this.state !== 'listening') return
     this.setState('processing')
     this.broadcast(IPC.HOTKEY_RELEASE)
-
     this.runPipeline().catch((err: unknown) => {
       const msg = err instanceof Error ? err.message : String(err)
       console.error('[companion] pipeline error:', msg)
@@ -68,10 +63,30 @@ export class CompanionManager {
     })
   }
 
-  /** Called by audio IPC handler when renderer sends a chunk */
   onAudioChunk(base64: string): void {
     if (this.state !== 'listening') return
     this.audioChunks.push(Buffer.from(base64, 'base64'))
+  }
+
+  // ---------------------------------------------------------------------------
+  // Manual text query (typed in the panel UI)
+  // ---------------------------------------------------------------------------
+
+  onManualQuery(text: string): void {
+    if (this.state !== 'idle') return
+    const q = text.trim()
+    if (!q) return
+    this.transcript = q
+    this.responseText = ''
+    this.error = ''
+    this.setState('processing')
+    this.broadcast(IPC.HOTKEY_RELEASE)  // tell UI we're past listening state
+    this.runPipeline(q).catch((err: unknown) => {
+      const msg = err instanceof Error ? err.message : String(err)
+      console.error('[companion] manual query error:', msg)
+      this.error = msg
+      this.setState('idle')
+    })
   }
 
   reset(): void {
@@ -85,42 +100,48 @@ export class CompanionManager {
   }
 
   // ---------------------------------------------------------------------------
-  // Core pipeline — transcribe → screenshot → Claude stream → TTS → overlay
+  // Core pipeline
   // ---------------------------------------------------------------------------
 
-  private async runPipeline(): Promise<void> {
+  /**
+   * @param manualTranscript  When provided, skip audio capture and use this text.
+   */
+  private async runPipeline(manualTranscript?: string): Promise<void> {
     const proxy = getProxyUrl()
 
-    // 1. Transcribe audio (non-fatal if it fails)
-    if (this.audioChunks.length > 0) {
-      const wav = Buffer.concat(this.audioChunks)
-      this.audioChunks = []
-      this.transcript = await transcribeAudio(wav, proxy)
-      console.info('[companion] transcript:', this.transcript)
+    // 1. Transcribe audio (only for voice mode, not manual text)
+    if (!manualTranscript) {
+      if (this.audioChunks.length > 0) {
+        const wav = Buffer.concat(this.audioChunks)
+        this.audioChunks = []
+        this.transcript = await transcribeAudio(wav, proxy)
+        console.info('[companion] transcript:', this.transcript)
+      }
     }
 
-    // 2. Screenshot
-    const screenshot = await captureScreen()
+    // 2. Screenshot (returns base64 + logical pixel dimensions)
+    const { base64: screenshot, width: screenWidth, height: screenHeight } = await captureScreen()
 
-    // 3. Stream Claude response — each chunk goes to the panel UI in real-time
+    // 3. Stream AI response
     this.responseText = ''
     const { text, point } = await streamGuidance({
       screenshotBase64: screenshot,
-      transcript: this.transcript,
+      transcript: manualTranscript ?? this.transcript,
       history: this.history,
       proxyUrl: proxy,
+      screenWidth,
+      screenHeight,
       onChunk: (chunk) => {
         this.responseText += chunk
-        // Send each chunk to renderer so text types in progressively
         if (!this.panelWindow.isDestroyed()) {
           this.panelWindow.webContents.send(IPC.CLAUDE_CHUNK, chunk)
         }
       },
     })
 
-    // 4. Update conversation history (cap at MAX_HISTORY turns)
+    // 4. Update conversation history
     this.history.push(
-      { role: 'user', content: this.transcript || '(screenshot only)' },
+      { role: 'user',      content: manualTranscript ?? this.transcript ?? '(screenshot only)' },
       { role: 'assistant', content: text },
     )
     if (this.history.length > MAX_HISTORY * 2) {
@@ -129,17 +150,15 @@ export class CompanionManager {
 
     this.panelWindow.webContents.send(IPC.CLAUDE_DONE)
 
-    // 5. Show overlay cursor if Claude pointed at something
+    // 5. Show overlay cursor if AI pointed at something
     if (point) this.showOverlayPoint(point)
 
     // 6. TTS
     this.setState('responding')
     await speak(text, proxy)
 
-    // 7. Done — back to idle
+    // 7. Done
     this.setState('idle')
-
-    // Auto-hide overlay after 8 seconds
     setTimeout(() => this.hideOverlay(), 8_000)
   }
 
@@ -171,12 +190,7 @@ export class CompanionManager {
   }
 
   getStatus(): CompanionStatus {
-    return {
-      state: this.state,
-      responseText: this.responseText,
-      transcript: this.transcript,
-      error: this.error,
-    }
+    return { state: this.state, responseText: this.responseText, transcript: this.transcript, error: this.error }
   }
 
   private broadcastStatus(): void {
@@ -193,13 +207,14 @@ export class CompanionManager {
   }
 
   // ---------------------------------------------------------------------------
-  // IPC handlers
+  // IPC
   // ---------------------------------------------------------------------------
 
   private registerIpc(): void {
-    ipcMain.handle(IPC.GET_STATUS, () => this.getStatus())
-    ipcMain.handle(IPC.RESET, () => this.reset())
+    ipcMain.handle(IPC.GET_STATUS,    () => this.getStatus())
+    ipcMain.handle(IPC.RESET,         () => this.reset())
+    ipcMain.handle(IPC.MANUAL_QUERY,  (_, text: string) => this.onManualQuery(text))
     ipcMain.on(IPC.AUDIO_CHUNK, (_, base64: string) => this.onAudioChunk(base64))
-    ipcMain.on(IPC.AUDIO_STOP, () => { /* audio stop acknowledged */ })
+    ipcMain.on(IPC.AUDIO_STOP,  () => { /* audio stop acknowledged */ })
   }
 }
