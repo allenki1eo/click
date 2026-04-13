@@ -145,6 +145,8 @@ async function handleOpenRouterChat(body, res) {
     return;
   }
 
+  console.log('[OpenRouter] Routing to OpenRouter');
+
   const options = {
     hostname: 'openrouter.ai',
     path: '/api/v1/chat/completions',
@@ -169,21 +171,23 @@ async function handleOpenRouterChat(body, res) {
   }
 }
 
-// BigModel.cn (Zhipu AI) chat handler
+// BigModel.cn (Zhipu AI) chat handler - streaming via proxyRequestStream
 async function handleBigModelChat(parsed, res) {
   if (!process.env.BIGMODEL_API_KEY) {
+    console.error('[BigModel] BIGMODEL_API_KEY is not set in .env — cannot route to GLM');
     res.writeHead(500, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ error: 'BIGMODEL_API_KEY not configured' }));
+    res.end(JSON.stringify({ error: 'BIGMODEL_API_KEY not configured. Add it to proxy/.env' }));
     return;
   }
 
   const bigModelBody = JSON.stringify({
     model: parsed.model || 'glm-5v-turbo',
     messages: parsed.messages,
-    stream: parsed.stream ?? true,
-    thinking: { type: 'enabled' },
-    max_tokens: parsed.max_tokens ?? 1024,
+    stream: true,
+    max_tokens: parsed.max_tokens ?? 800,
   });
+
+  console.log(`[BigModel] Routing to BigModel.cn — model=${parsed.model || 'glm-5v-turbo'}`);
 
   const options = {
     hostname: 'open.bigmodel.cn',
@@ -193,50 +197,14 @@ async function handleBigModelChat(parsed, res) {
     headers: {
       'Authorization': `Bearer ${process.env.BIGMODEL_API_KEY}`,
       'Content-Type': 'application/json',
+      'Content-Length': Buffer.byteLength(bigModelBody),
     }
   };
 
   try {
-    const upstream = await proxyRequest(options, bigModelBody);
-
-    if (upstream.status >= 200 && upstream.status < 300) {
-      // Check if it's a streaming response
-      const contentType = upstream.headers['content-type'] || '';
-
-      if (contentType.includes('text/event-stream')) {
-        // Streaming response - pass through
-        res.writeHead(200, {
-          ...CORS_HEADERS,
-          'Content-Type': 'text/event-stream',
-          'Cache-Control': 'no-cache',
-        });
-        res.end(upstream.data);
-      } else {
-        // Non-streaming - parse and wrap in SSE format
-        const json = JSON.parse(upstream.data);
-        const content = json.choices?.[0]?.message?.content || '';
-
-        // Wrap in SSE format for compatibility
-        res.writeHead(200, {
-          ...CORS_HEADERS,
-          'Content-Type': 'text/event-stream',
-          'Cache-Control': 'no-cache',
-        });
-
-        // Send as SSE
-        const sseData = `data: ${JSON.stringify({ choices: [{ delta: { content } }] })}
-
-data: [DONE]
-
-`;
-        res.end(sseData);
-      }
-    } else {
-      res.writeHead(upstream.status, { 'Content-Type': 'application/json' });
-      res.end(upstream.data);
-    }
+    await proxyRequestStream(options, bigModelBody, res);
   } catch (err) {
-    console.error('[BigModel] Error:', err.message);
+    console.error('[BigModel] Stream error:', err.message);
     if (!res.headersSent) {
       res.writeHead(500, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: err.message }));

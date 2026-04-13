@@ -131,10 +131,8 @@ async function handleBigModelChat(body: string, env: Env): Promise<Response> {
     body: JSON.stringify({
       model: parsed.model || 'glm-5v-turbo',
       messages: parsed.messages,
-      stream: parsed.stream ?? true,
-      // Enable thinking mode for better reasoning
-      thinking: { type: 'enabled' },
-      max_tokens: parsed.max_tokens ?? 1024,
+      stream: true,
+      max_tokens: parsed.max_tokens ?? 800,
     }),
   })
 
@@ -144,42 +142,15 @@ async function handleBigModelChat(body: string, env: Env): Promise<Response> {
     return ok(err, { status: upstream.status, headers: { 'content-type': 'application/json' } })
   }
 
-  // BigModel may not support streaming the same way - handle both cases
-  const contentType = upstream.headers.get('content-type') || ''
-
-  if (contentType.includes('text/event-stream')) {
-    // Streaming response
-    return new Response(upstream.body, {
-      status: 200,
-      headers: {
-        ...CORS,
-        'content-type': 'text/event-stream',
-        'cache-control': 'no-cache',
-      },
-    })
-  } else {
-    // Non-streaming - wrap in SSE format for compatibility
-    const json = await upstream.json()
-    const content = json.choices?.[0]?.message?.content || ''
-    const sseData = `data: ${JSON.stringify({ choices: [{ delta: { content } }] })}
-
-`
-    const stream = new ReadableStream({
-      start(controller) {
-        controller.enqueue(new TextEncoder().encode(sseData))
-        controller.enqueue(new TextEncoder().encode('data: [DONE]\n\n'))
-        controller.close()
-      },
-    })
-    return new Response(stream, {
-      status: 200,
-      headers: {
-        ...CORS,
-        'content-type': 'text/event-stream',
-        'cache-control': 'no-cache',
-      },
-    })
-  }
+  // Pipe the streaming SSE response directly to the client
+  return new Response(upstream.body, {
+    status: 200,
+    headers: {
+      ...CORS,
+      'content-type': 'text/event-stream',
+      'cache-control': 'no-cache',
+    },
+  })
 }
 
 // ---------------------------------------------------------------------------
