@@ -224,6 +224,15 @@ async function handleTts(request: Request, env: Env): Promise<Response> {
 // ---------------------------------------------------------------------------
 
 async function handleTranscribeToken(env: Env): Promise<Response> {
+  if (!env.ASSEMBLYAI_API_KEY) {
+    console.error('[transcribe-token] ERROR: ASSEMBLYAI_API_KEY not configured')
+    return ok(JSON.stringify({ error: 'ASSEMBLYAI_API_KEY not configured' }), {
+      status: 500,
+      headers: { 'content-type': 'application/json' },
+    })
+  }
+
+  console.info('[transcribe-token] Requesting token from AssemblyAI...')
   const upstream = await fetch(
     'https://streaming.assemblyai.com/v3/token?expires_in_seconds=480',
     { headers: { authorization: env.ASSEMBLYAI_API_KEY } }
@@ -231,10 +240,14 @@ async function handleTranscribeToken(env: Env): Promise<Response> {
 
   if (!upstream.ok) {
     const err = await upstream.text()
-    console.error('/transcribe-token upstream error', upstream.status, err)
-    return ok(err, { status: upstream.status })
+    console.error('[transcribe-token] ERROR: AssemblyAI returned', upstream.status, err)
+    return ok(JSON.stringify({ error: `AssemblyAI error ${upstream.status}`, details: err }), {
+      status: upstream.status,
+      headers: { 'content-type': 'application/json' },
+    })
   }
 
+  console.info('[transcribe-token] Token obtained successfully')
   return ok(await upstream.text(), {
     status: 200,
     headers: { 'content-type': 'application/json' },

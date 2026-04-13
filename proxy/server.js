@@ -274,6 +274,22 @@ async function handleTTS(body, res) {
 
 // Transcribe token handler
 async function handleTranscribeToken(res) {
+  console.log('[transcribe-token] Checking ASSEMBLYAI_API_KEY...');
+  
+  if (!process.env.ASSEMBLYAI_API_KEY) {
+    console.error('[transcribe-token] ERROR: ASSEMBLYAI_API_KEY is not set!');
+    console.error('[transcribe-token] Please add ASSEMBLYAI_API_KEY to your .env file');
+    res.writeHead(500, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ 
+      error: 'ASSEMBLYAI_API_KEY not configured',
+      message: 'Add ASSEMBLYAI_API_KEY to proxy/.env file. Get one at https://www.assemblyai.com/app'
+    }));
+    return;
+  }
+
+  console.log('[transcribe-token] Requesting token from AssemblyAI...');
+  console.log('[transcribe-token] API Key (first 8 chars):', process.env.ASSEMBLYAI_API_KEY.substring(0, 8) + '...');
+
   const options = {
     hostname: 'streaming.assemblyai.com',
     path: '/v3/token?expires_in_seconds=480',
@@ -284,9 +300,32 @@ async function handleTranscribeToken(res) {
     }
   };
 
-  const upstream = await proxyRequest(options);
-  res.writeHead(upstream.status, { 'Content-Type': 'application/json' });
-  res.end(upstream.data);
+  try {
+    const upstream = await proxyRequest(options);
+    console.log('[transcribe-token] AssemblyAI response status:', upstream.status);
+    
+    if (upstream.status >= 200 && upstream.status < 300) {
+      console.log('[transcribe-token] Token obtained successfully');
+      res.writeHead(upstream.status, { 'Content-Type': 'application/json' });
+      res.end(upstream.data);
+    } else {
+      console.error('[transcribe-token] ERROR: AssemblyAI returned', upstream.status);
+      console.error('[transcribe-token] Response:', upstream.data);
+      res.writeHead(upstream.status, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ 
+        error: `AssemblyAI error ${upstream.status}`,
+        details: upstream.data,
+        message: 'Check your ASSEMBLYAI_API_KEY is valid'
+      }));
+    }
+  } catch (err) {
+    console.error('[transcribe-token] ERROR:', err.message);
+    res.writeHead(500, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ 
+      error: err.message,
+      message: 'Failed to connect to AssemblyAI'
+    }));
+  }
 }
 
 server.listen(PORT, () => {
