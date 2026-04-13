@@ -3,9 +3,13 @@
  *
  * States: idle → listening → processing → responding → idle
  *
- * Two ways to trigger a query:
- *  1. PTT (push-to-talk): records audio, transcribes, sends screenshot + text
- *  2. Manual text (onManualQuery): skips audio, uses typed text directly
+ * Voice path (new):
+ *   onPress() sets state=listening; the renderer uses the Web Speech API to
+ *   get a transcript, then calls submitQuery() — exactly like typed text.
+ *   onRelease() therefore only broadcasts HOTKEY_RELEASE so the renderer
+ *   knows to stop its speech recognition; no pipeline runs here.
+ *
+ * Text path: onManualQuery() — accepts typed text OR Web-Speech transcript.
  *
  * Conversation history: last 10 turns kept in memory.
  */
@@ -16,7 +20,6 @@ import type { CompanionState, CompanionStatus, Message, PointTarget } from '../s
 import { captureScreen } from './screenshot'
 import { streamGuidance } from '../services/claude'
 import { speak, setTtsWindow } from '../services/tts'
-import { transcribeAudio } from '../services/transcription'
 import { getProxyUrl, getOrbConfig } from './config'
 
 const MAX_HISTORY = 10
@@ -27,7 +30,6 @@ export class CompanionManager {
   private transcript = ''
   private error = ''
   private history: Message[] = []
-  private audioChunks: Buffer[] = []
 
   constructor(
     private readonly panelWindow: BrowserWindow,
@@ -43,7 +45,6 @@ export class CompanionManager {
 
   onPress(): void {
     if (this.state !== 'idle') return
-    this.audioChunks = []
     this.transcript = ''
     this.responseText = ''
     this.error = ''
@@ -51,11 +52,27 @@ export class CompanionManager {
     this.broadcast(IPC.HOTKEY_PRESS)
   }
 
+  /** Release just signals the renderer to stop Web Speech — pipeline runs via onManualQuery */
   onRelease(): void {
     if (this.state !== 'listening') return
-    this.setState('processing')
+    this.setState('idle')
     this.broadcast(IPC.HOTKEY_RELEASE)
-    this.runPipeline().catch((err: unknown) => {
+  }
+
+  // ---------------------------------------------------------------------------
+  // Manual text / Web-Speech transcript query
+  // ---------------------------------------------------------------------------
+
+  onManualQuery(text: string): void {
+    // Accept 'idle' AND 'listening' (Web-Speech can finish before key is released)
+    if (this.state !== 'idle' && this.state !== 'listening') return
+    const q = text.trim()
+    if (!q) return
+    this.transcript = q
+    this.responseText = ''
+    this.error = ''
+    this.setState('processing')
+    this.runPipeline(q).catch((err: unknown) => {
       const msg = err instanceof Error ? err.message : String(err)
       console.error('[companion] pipeline error:', msg)
       this.error = msg
@@ -63,34 +80,7 @@ export class CompanionManager {
     })
   }
 
-  onAudioChunk(base64: string): void {
-    if (this.state !== 'listening') return
-    this.audioChunks.push(Buffer.from(base64, 'base64'))
-  }
-
-  // ---------------------------------------------------------------------------
-  // Manual text query (typed in the panel UI)
-  // ---------------------------------------------------------------------------
-
-  onManualQuery(text: string): void {
-    if (this.state !== 'idle') return
-    const q = text.trim()
-    if (!q) return
-    this.transcript = q
-    this.responseText = ''
-    this.error = ''
-    this.setState('processing')
-    this.broadcast(IPC.HOTKEY_RELEASE)  // tell UI we're past listening state
-    this.runPipeline(q).catch((err: unknown) => {
-      const msg = err instanceof Error ? err.message : String(err)
-      console.error('[companion] manual query error:', msg)
-      this.error = msg
-      this.setState('idle')
-    })
-  }
-
   reset(): void {
-    this.audioChunks = []
     this.history = []
     this.responseText = ''
     this.transcript = ''
@@ -103,33 +93,20 @@ export class CompanionManager {
   // Core pipeline
   // ---------------------------------------------------------------------------
 
-  /**
-   * @param manualTranscript  When provided, skip audio capture and use this text.
-   */
-  private async runPipeline(manualTranscript?: string): Promise<void> {
+  private async runPipeline(question: string): Promise<void> {
     const proxy = getProxyUrl()
 
-    // 1. Transcribe audio (only for voice mode, not manual text)
-    if (!manualTranscript) {
-      if (this.audioChunks.length > 0) {
-        const wav = Buffer.concat(this.audioChunks)
-        this.audioChunks = []
-        this.transcript = await transcribeAudio(wav, proxy)
-        console.info('[companion] transcript:', this.transcript)
-      }
-    }
+    // 1. Screenshot (returns base64 + logical pixel dimensions + display bounds)
+    const { base64: screenshot, width: screenWidth, height: screenHeight, displayBounds } = await captureScreen()
 
-    // 2. Screenshot (returns base64 + logical pixel dimensions)
-    const { base64: screenshot, width: screenWidth, height: screenHeight } = await captureScreen()
-
-    // 3. Stream AI response
+    // 2. Stream AI response
     this.responseText = ''
     const { personality } = getOrbConfig()
     const { text, point } = await streamGuidance({
       screenshotBase64: screenshot,
-      transcript: manualTranscript ?? this.transcript,
-      history: this.history,
-      proxyUrl: proxy,
+      transcript:       question,
+      history:          this.history,
+      proxyUrl:         proxy,
       screenWidth,
       screenHeight,
       personality,
@@ -141,9 +118,9 @@ export class CompanionManager {
       },
     })
 
-    // 4. Update conversation history
+    // 3. Update conversation history
     this.history.push(
-      { role: 'user',      content: manualTranscript ?? this.transcript ?? '(screenshot only)' },
+      { role: 'user',      content: question },
       { role: 'assistant', content: text },
     )
     if (this.history.length > MAX_HISTORY * 2) {
@@ -152,14 +129,14 @@ export class CompanionManager {
 
     this.panelWindow.webContents.send(IPC.CLAUDE_DONE)
 
-    // 5. Show overlay cursor if AI pointed at something
-    if (point) this.showOverlayPoint(point)
+    // 4. Show overlay cursor on the correct display
+    if (point) this.showOverlayPoint(point, displayBounds)
 
-    // 6. TTS
+    // 5. TTS
     this.setState('responding')
     await speak(text, proxy)
 
-    // 7. Done
+    // 6. Done
     this.setState('idle')
     setTimeout(() => this.hideOverlay(), 8_000)
   }
@@ -168,8 +145,10 @@ export class CompanionManager {
   // Overlay helpers
   // ---------------------------------------------------------------------------
 
-  private showOverlayPoint(point: PointTarget): void {
+  private showOverlayPoint(point: PointTarget, displayBounds: Electron.Rectangle): void {
     if (this.overlayWindow.isDestroyed()) return
+    // Reposition overlay to the display that was captured
+    this.overlayWindow.setBounds(displayBounds)
     this.overlayWindow.webContents.send(IPC.OVERLAY_POINT, point)
     this.overlayWindow.webContents.send(IPC.OVERLAY_TEXT, this.responseText)
     this.overlayWindow.show()
@@ -213,10 +192,8 @@ export class CompanionManager {
   // ---------------------------------------------------------------------------
 
   private registerIpc(): void {
-    ipcMain.handle(IPC.GET_STATUS,    () => this.getStatus())
-    ipcMain.handle(IPC.RESET,         () => this.reset())
-    ipcMain.handle(IPC.MANUAL_QUERY,  (_, text: string) => this.onManualQuery(text))
-    ipcMain.on(IPC.AUDIO_CHUNK, (_, base64: string) => this.onAudioChunk(base64))
-    ipcMain.on(IPC.AUDIO_STOP,  () => { /* audio stop acknowledged */ })
+    ipcMain.handle(IPC.GET_STATUS,   () => this.getStatus())
+    ipcMain.handle(IPC.RESET,        () => this.reset())
+    ipcMain.handle(IPC.MANUAL_QUERY, (_, text: string) => this.onManualQuery(text))
   }
 }

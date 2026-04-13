@@ -58,26 +58,33 @@ export async function streamGuidance(opts: {
 }): Promise<{ text: string; point: PointTarget | null }> {
   const { screenshotBase64, transcript, history, proxyUrl, screenWidth, screenHeight, personality, onChunk } = opts
 
-  const model = 'glm-5v-turbo'
+  const model    = 'glm-5v-turbo'
   const question = transcript?.trim() || 'What do you see? Give me a brief summary and point to the main interactive element.'
   const personalityHint = PERSONALITY_HINTS[personality ?? 'friendly'] ?? PERSONALITY_HINTS['friendly']
 
-  // For GLM vision models we embed all instructions in the user message
-  // (GLM does not reliably follow system prompts).
-  // We tell it the coordinate system explicitly so POINT tags are accurate.
+  // Anchor grid: gives the model concrete reference points for coordinate accuracy
+  const W = screenWidth, H = screenHeight
+  const coordContext =
+    `Screen: ${W}×${H} px. Origin (0,0) is TOP-LEFT. X increases rightward, Y increases downward.\n` +
+    `Anchor points → corners: TL=(0,0) TR=(${W},0) BL=(0,${H}) BR=(${W},${H})\n` +
+    `Centre=(${W>>1},${H>>1})  Left-mid=(0,${H>>1})  Right-mid=(${W},${H>>1})  Top-mid=(${W>>1},0)  Bottom-mid=(${W>>1},${H})\n` +
+    `Quarter centres: (${W>>2},${H>>2}) (${3*(W>>2)},${H>>2}) (${W>>2},${3*(H>>2)}) (${3*(W>>2)},${3*(H>>2)})\n` +
+    `To estimate coordinates: decide which quarter the element is in, then refine within that quarter.`
+
   const userText =
-    `You are a screen navigation assistant. The screenshot is ${screenWidth}×${screenHeight} pixels ` +
-    `(x goes 0=left to ${screenWidth}=right, y goes 0=top to ${screenHeight}=bottom).\n` +
-    `Personality: ${personalityHint}\n\n` +
+    `You are a screen navigation assistant.\n` +
+    `${coordContext}\n` +
+    `Tone: ${personalityHint}\n\n` +
     `MY QUESTION: "${question}"\n\n` +
-    `Rules:\n` +
-    `1. Answer my SPECIFIC question — do NOT just describe everything you see.\n` +
-    `2. Keep your answer under 3 sentences.\n` +
-    `3. If pointing to a UI element, append exactly ONE tag at the end:\n` +
-    `   [POINT:x,y:element name:screen0]  ← x,y are pixel coords of the element CENTER.\n` +
-    `   Example for a button at the middle-right: [POINT:${Math.round(screenWidth * 0.75)},${Math.round(screenHeight * 0.5)}:Submit button:screen0]\n` +
-    `4. Only add [POINT:...] when you can identify a specific clickable element to point at.\n` +
-    `5. Do NOT add [POINT:...] for general questions that don't need pointing.`
+    `RULES:\n` +
+    `1. Answer the question directly and concisely (≤3 sentences).\n` +
+    `2. If the answer requires pointing to a specific UI element, append EXACTLY ONE tag:\n` +
+    `   [POINT:x,y:element name:screen0]\n` +
+    `   where x,y are the pixel coordinates of the element's CENTER — use the anchor grid to be precise.\n` +
+    `   Example (button in lower-right quarter): [POINT:${Math.round(W*0.78)},${Math.round(H*0.72)}:Submit button:screen0]\n` +
+    `3. Only add [POINT:...] for a specific clickable element the user needs to act on.\n` +
+    `4. Do NOT add [POINT:none] or any POINT tag for general questions.\n` +
+    `5. Do NOT describe every element on screen — answer the specific question.`
 
   const currentUserMessage = {
     role: 'user',
@@ -96,7 +103,7 @@ export async function streamGuidance(opts: {
   const response = await (net.fetch as typeof fetch)(`${proxyUrl}/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ model, max_tokens: 800, stream: true, messages }),
+    body: JSON.stringify({ model, max_tokens: 1000, stream: true, messages }),
   })
 
   if (!response.ok) {
