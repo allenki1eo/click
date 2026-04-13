@@ -18,6 +18,8 @@ import { HotkeyManager } from './hotkey'
 import { TrayManager } from './tray'
 import { createOverlayWindow, resizeOverlayToScreen } from './overlay'
 import { IPC } from '../shared/ipc'
+import { getOrbConfig, setOrbConfig } from './config'
+import type { OrbConfig } from '../shared/types'
 
 const PRELOAD = join(__dirname, '../preload/index.js')
 
@@ -181,6 +183,16 @@ app.whenReady().then(() => {
 
   // Legacy toggle-panel IPC (tray / keyboard shortcut)
   ipcMain.handle('window:toggle-panel', () => togglePanel(panelWindow, orbWindow))
+
+  // Orb customisation IPC
+  ipcMain.handle(IPC.GET_ORB_CONFIG, () => getOrbConfig())
+  ipcMain.handle(IPC.SET_ORB_CONFIG, (_, cfg: Partial<OrbConfig>) => {
+    setOrbConfig(cfg)
+    const updated = getOrbConfig()
+    for (const win of [panelWindow, orbWindow, overlayWindow]) {
+      if (!win.isDestroyed()) win.webContents.send(IPC.ORB_CONFIG, updated)
+    }
+  })
 
   // Re-size overlay + reposition orb if display config changes
   app.on('browser-window-created', () => {

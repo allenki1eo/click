@@ -39,6 +39,13 @@ export function parsePointTag(text: string): { clean: string; point: PointTarget
 // Streaming guidance call
 // ---------------------------------------------------------------------------
 
+const PERSONALITY_HINTS: Record<string, string> = {
+  friendly:     'Use a warm, supportive tone — like a helpful friend.',
+  professional: 'Be precise and formal. No filler words.',
+  playful:      'Be fun and enthusiastic! Use light humour where fitting.',
+  concise:      'Be extremely brief — one sentence max if possible.',
+}
+
 export async function streamGuidance(opts: {
   screenshotBase64: string
   transcript: string
@@ -46,19 +53,22 @@ export async function streamGuidance(opts: {
   proxyUrl: string
   screenWidth: number
   screenHeight: number
+  personality?: string
   onChunk: (text: string) => void
 }): Promise<{ text: string; point: PointTarget | null }> {
-  const { screenshotBase64, transcript, history, proxyUrl, screenWidth, screenHeight, onChunk } = opts
+  const { screenshotBase64, transcript, history, proxyUrl, screenWidth, screenHeight, personality, onChunk } = opts
 
   const model = 'glm-5v-turbo'
   const question = transcript?.trim() || 'What do you see? Give me a brief summary and point to the main interactive element.'
+  const personalityHint = PERSONALITY_HINTS[personality ?? 'friendly'] ?? PERSONALITY_HINTS['friendly']
 
   // For GLM vision models we embed all instructions in the user message
   // (GLM does not reliably follow system prompts).
   // We tell it the coordinate system explicitly so POINT tags are accurate.
   const userText =
     `You are a screen navigation assistant. The screenshot is ${screenWidth}×${screenHeight} pixels ` +
-    `(x goes 0=left to ${screenWidth}=right, y goes 0=top to ${screenHeight}=bottom).\n\n` +
+    `(x goes 0=left to ${screenWidth}=right, y goes 0=top to ${screenHeight}=bottom).\n` +
+    `Personality: ${personalityHint}\n\n` +
     `MY QUESTION: "${question}"\n\n` +
     `Rules:\n` +
     `1. Answer my SPECIFIC question — do NOT just describe everything you see.\n` +

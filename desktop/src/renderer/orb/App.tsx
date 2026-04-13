@@ -5,9 +5,11 @@
  * • Random blinking every 3-6 s to feel alive
  * • Hover glow + press squeeze animation
  * • Clicking toggles the panel window
+ * • Reacts to OrbConfig changes (theme colour)
  */
 
 import React, { useEffect, useRef, useState } from 'react'
+import type { OrbConfig } from '../../shared/types'
 
 // ─── sizes (logical px) ────────────────────────────────────────────────────
 const ORB          = 66   // orb body diameter
@@ -79,7 +81,15 @@ export function App(): React.ReactElement {
   const [hovered, setHovered] = useState(false)
   const [blink,   setBlink]   = useState(false)
   const [pressed, setPressed] = useState(false)
+  const [theme,   setTheme]   = useState('#10b981')
   const blinkTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // ── load initial config + subscribe to changes ──────────────────────────
+  useEffect(() => {
+    window.api.getOrbConfig().then((cfg: OrbConfig) => setTheme(cfg.theme))
+    const unsub = window.api.onOrbConfig((cfg: OrbConfig) => setTheme(cfg.theme))
+    return unsub
+  }, [])
 
   // ── cursor tracking from main process ──────────────────────────────────
   useEffect(() => {
@@ -123,6 +133,14 @@ export function App(): React.ReactElement {
 
   const scale = pressed ? 0.86 : hovered ? 1.07 : 1.0
 
+  // Derive lighter body colours from the theme hex
+  const themeR = parseInt(theme.slice(1, 3), 16)
+  const themeG = parseInt(theme.slice(3, 5), 16)
+  const themeB = parseInt(theme.slice(5, 7), 16)
+  const bodyDark  = `rgb(${Math.round(themeR * 0.08)}, ${Math.round(themeG * 0.12)}, ${Math.round(themeB * 0.06)})`
+  const bodyMid   = `rgb(${Math.round(themeR * 0.16)}, ${Math.round(themeG * 0.20)}, ${Math.round(themeB * 0.12)})`
+  const bodyLight = `rgb(${Math.round(themeR * 0.28)}, ${Math.round(themeG * 0.32)}, ${Math.round(themeB * 0.22)})`
+
   return (
     <div
       onClick={handleClick}
@@ -149,8 +167,8 @@ export function App(): React.ReactElement {
           height:       ORB + 28,
           borderRadius: '50%',
           background:   hovered
-            ? 'radial-gradient(circle, rgba(16,185,129,0.38) 0%, transparent 68%)'
-            : 'radial-gradient(circle, rgba(16,185,129,0.18) 0%, transparent 68%)',
+            ? `radial-gradient(circle, ${theme}61 0%, transparent 68%)`
+            : `radial-gradient(circle, ${theme}2e 0%, transparent 68%)`,
           animation:    'halo 2.8s ease-in-out infinite',
           pointerEvents:'none',
           transition:   'background 0.3s ease',
@@ -163,16 +181,15 @@ export function App(): React.ReactElement {
           width:        ORB,
           height:       ORB,
           borderRadius: '50%',
-          /* rich dark green radial gradient — lighter at top-left to mimic a sphere */
-          background:   'radial-gradient(circle at 38% 30%, #1d3522 0%, #0e1f10 50%, #060d06 100%)',
-          border:       `2px solid ${hovered ? 'rgba(16,185,129,0.9)' : 'rgba(16,185,129,0.52)'}`,
+          background:   `radial-gradient(circle at 38% 30%, ${bodyLight} 0%, ${bodyMid} 50%, ${bodyDark} 100%)`,
+          border:       `2px solid ${hovered ? theme + 'e6' : theme + '85'}`,
           boxShadow:    hovered
-            ? '0 0 26px rgba(16,185,129,0.6), 0 8px 22px rgba(0,0,0,0.65)'
-            : '0 0 12px rgba(16,185,129,0.28), 0 5px 14px rgba(0,0,0,0.55)',
+            ? `0 0 26px ${theme}99, 0 8px 22px rgba(0,0,0,0.65)`
+            : `0 0 12px ${theme}47, 0 5px 14px rgba(0,0,0,0.55)`,
           position:     'relative',
           overflow:     'hidden',
           transform:    `scale(${scale})`,
-          transition:   'transform 0.13s cubic-bezier(.34,1.56,.64,1), border-color 0.2s, box-shadow 0.2s',
+          transition:   'transform 0.13s cubic-bezier(.34,1.56,.64,1), border-color 0.2s, box-shadow 0.2s, background 0.4s',
         }}
       >
         {/* Top-left gloss */}
@@ -200,7 +217,7 @@ export function App(): React.ReactElement {
             width:        38,
             height:       7,
             borderRadius: '50%',
-            background:   'rgba(16,185,129,0.22)',
+            background:   `${theme}38`,
             pointerEvents:'none',
           }}
         />
@@ -229,7 +246,7 @@ export function App(): React.ReactElement {
             transform:    'translateX(-50%)',
             width:        26,
             height:       10,
-            borderBottom: `2px solid rgba(16,185,129,${hovered ? 0.85 : 0.5})`,
+            borderBottom: `2px solid ${theme}${hovered ? 'd9' : '80'}`,
             borderRadius: '0 0 50% 50%',
             transition:   'border-color 0.2s',
             pointerEvents:'none',
