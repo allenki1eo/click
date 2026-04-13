@@ -38,4 +38,9 @@ export const IPC = {
   GET_STATUS:    'get-status',
   RESET:         'reset',
   MANUAL_QUERY:  'query:manual',   // typed question from panel UI
+
+  // Orb customisation (renderer ↔ main)
+  GET_ORB_CONFIG: 'orb:get-config',   // renderer invoke → main returns OrbConfig
+  SET_ORB_CONFIG: 'orb:set-config',   // renderer invoke → main saves + broadcasts
+  ORB_CONFIG:     'orb:config',       // main → all renderers on change
 } as const

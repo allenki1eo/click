@@ -7,6 +7,13 @@ export interface Message {
   content: string
 }
 
+/** Orb appearance and personality config — persisted in electron-store */
+export interface OrbConfig {
+  name: string
+  theme: string   // hex colour, e.g. "#10b981"
+  personality: 'friendly' | 'professional' | 'playful' | 'concise'
+}
+
 /** Parsed [POINT:x,y:label:screenN] tag from Claude response */
 export interface PointTarget {
   x: number

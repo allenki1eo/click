@@ -5,7 +5,7 @@
 
 import { contextBridge, ipcRenderer } from 'electron'
 import { IPC } from '../shared/ipc'
-import type { CompanionStatus, PointTarget } from '../shared/types'
+import type { CompanionStatus, OrbConfig, PointTarget } from '../shared/types'
 
 function on<T>(ch: string, cb: (v: T) => void): () => void {
   const h = (_: Electron.IpcRendererEvent, v: T): void => cb(v)
@@ -54,6 +54,11 @@ const api = {
   // Orb
   onCursorMove: (cb: (d: unknown) => void) => on(IPC.CURSOR_MOVE, cb),
   orbClick:     (): void => ipcRenderer.send(IPC.ORB_CLICK),
+
+  // Orb customisation
+  getOrbConfig: (): Promise<OrbConfig> => ipcRenderer.invoke(IPC.GET_ORB_CONFIG),
+  setOrbConfig: (cfg: Partial<OrbConfig>): Promise<void> => ipcRenderer.invoke(IPC.SET_ORB_CONFIG, cfg),
+  onOrbConfig:  (cb: (cfg: OrbConfig) => void) => on<OrbConfig>(IPC.ORB_CONFIG, cb),
 }
 
 contextBridge.exposeInMainWorld('api', api)

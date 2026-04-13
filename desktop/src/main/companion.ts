@@ -17,7 +17,7 @@ import { captureScreen } from './screenshot'
 import { streamGuidance } from '../services/claude'
 import { speak, setTtsWindow } from '../services/tts'
 import { transcribeAudio } from '../services/transcription'
-import { getProxyUrl } from './config'
+import { getProxyUrl, getOrbConfig } from './config'
 
 const MAX_HISTORY = 10
 
@@ -124,6 +124,7 @@ export class CompanionManager {
 
     // 3. Stream AI response
     this.responseText = ''
+    const { personality } = getOrbConfig()
     const { text, point } = await streamGuidance({
       screenshotBase64: screenshot,
       transcript: manualTranscript ?? this.transcript,
@@ -131,6 +132,7 @@ export class CompanionManager {
       proxyUrl: proxy,
       screenWidth,
       screenHeight,
+      personality,
       onChunk: (chunk) => {
         this.responseText += chunk
         if (!this.panelWindow.isDestroyed()) {
