@@ -16,7 +16,8 @@ export class TrayManager {
     private readonly companion: CompanionManager,
   ) {
     this.tray = new Tray(this.loadIcon())
-    this.tray.setToolTip('Mwongozo')
+    this.tray.setToolTip('Mwongozo — click the orb in the bottom-right to open')
+    // Left-click on tray is a secondary shortcut; right-click shows quit menu
     this.tray.on('click', (_, bounds) => this.togglePanel(bounds))
     this.tray.on('right-click', () => this.showMenu())
   }

@@ -50,6 +50,10 @@ const api = {
 
   // Manual text query from the panel input field
   submitQuery: (text: string): Promise<void> => ipcRenderer.invoke(IPC.MANUAL_QUERY, text),
+
+  // Orb
+  onCursorMove: (cb: (d: unknown) => void) => on(IPC.CURSOR_MOVE, cb),
+  orbClick:     (): void => ipcRenderer.send(IPC.ORB_CLICK),
 }
 
 contextBridge.exposeInMainWorld('api', api)

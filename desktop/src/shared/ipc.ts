@@ -30,6 +30,10 @@ export const IPC = {
   OVERLAY_POINT: 'overlay:point',
   OVERLAY_TEXT:  'overlay:text',
 
+  // Orb ↔ main
+  CURSOR_MOVE:   'cursor:move',    // main → orb renderer (16 ms poll)
+  ORB_CLICK:     'orb:click',      // orb renderer → main (toggle panel)
+
   // invoke channels (renderer → main, returns Promise)
   GET_STATUS:    'get-status',
   RESET:         'reset',
