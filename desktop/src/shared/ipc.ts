@@ -43,4 +43,8 @@ export const IPC = {
   GET_ORB_CONFIG: 'orb:get-config',   // renderer invoke → main returns OrbConfig
   SET_ORB_CONFIG: 'orb:set-config',   // renderer invoke → main saves + broadcasts
   ORB_CONFIG:     'orb:config',       // main → all renderers on change
+
+  // Proxy URL (renderer ↔ main)
+  GET_PROXY_URL:  'proxy:get-url',
+  SET_PROXY_URL:  'proxy:set-url',
 } as const

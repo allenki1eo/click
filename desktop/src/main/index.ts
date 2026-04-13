@@ -18,7 +18,7 @@ import { HotkeyManager } from './hotkey'
 import { TrayManager } from './tray'
 import { createOverlayWindow, resizeOverlayToScreen } from './overlay'
 import { IPC } from '../shared/ipc'
-import { getOrbConfig, setOrbConfig } from './config'
+import { getOrbConfig, setOrbConfig, getProxyUrl, setProxyUrl } from './config'
 import type { OrbConfig } from '../shared/types'
 
 const PRELOAD = join(__dirname, '../preload/index.js')
@@ -193,6 +193,10 @@ app.whenReady().then(() => {
       if (!win.isDestroyed()) win.webContents.send(IPC.ORB_CONFIG, updated)
     }
   })
+
+  // Proxy URL IPC
+  ipcMain.handle(IPC.GET_PROXY_URL, () => getProxyUrl())
+  ipcMain.handle(IPC.SET_PROXY_URL, (_, url: string) => setProxyUrl(url))
 
   // Re-size overlay + reposition orb if display config changes
   app.on('browser-window-created', () => {

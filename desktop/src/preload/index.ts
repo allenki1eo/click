@@ -59,6 +59,10 @@ const api = {
   getOrbConfig: (): Promise<OrbConfig> => ipcRenderer.invoke(IPC.GET_ORB_CONFIG),
   setOrbConfig: (cfg: Partial<OrbConfig>): Promise<void> => ipcRenderer.invoke(IPC.SET_ORB_CONFIG, cfg),
   onOrbConfig:  (cb: (cfg: OrbConfig) => void) => on<OrbConfig>(IPC.ORB_CONFIG, cb),
+
+  // Proxy URL
+  getProxyUrl: (): Promise<string> => ipcRenderer.invoke(IPC.GET_PROXY_URL),
+  setProxyUrl: (url: string): Promise<void> => ipcRenderer.invoke(IPC.SET_PROXY_URL, url),
 }
 
 contextBridge.exposeInMainWorld('api', api)
