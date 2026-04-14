@@ -47,4 +47,7 @@ export const IPC = {
   // Proxy URL (renderer ↔ main)
   GET_PROXY_URL:  'proxy:get-url',
   SET_PROXY_URL:  'proxy:set-url',
+
+  // Voice transcription (renderer → main → proxy AssemblyAI)
+  TRANSCRIBE_AUDIO: 'transcribe:audio',
 } as const
