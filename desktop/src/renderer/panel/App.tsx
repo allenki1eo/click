@@ -5,8 +5,6 @@
  */
 
 import React, { useEffect, useRef, useState } from 'react'
-import ReactMarkdown from 'react-markdown'
-import remarkGfm from 'remark-gfm'
 import type { CompanionStatus, OrbConfig } from '../../shared/types'
 
 // ---------------------------------------------------------------------------
@@ -46,65 +44,117 @@ function Dot({ state, theme }: { state: string; theme: string }): React.ReactEle
 }
 
 // ---------------------------------------------------------------------------
-// Markdown renderer — used for assistant messages
+// Markdown renderer — zero-dependency inline implementation
 // ---------------------------------------------------------------------------
 
+/** Render inline spans: **bold**, *italic*, `code` */
+function renderInline(text: string, theme: string): React.ReactNode {
+  const parts: React.ReactNode[] = []
+  // Combined regex: bold, italic, inline-code
+  const re = /\*\*(.+?)\*\*|\*(.+?)\*|`([^`]+)`/g
+  let lastIdx = 0
+  let match: RegExpExecArray | null
+  let key = 0
+
+  while ((match = re.exec(text)) !== null) {
+    if (match.index > lastIdx) parts.push(text.slice(lastIdx, match.index))
+    if (match[1] != null) {
+      parts.push(<strong key={key++} className="font-semibold text-white">{match[1]}</strong>)
+    } else if (match[2] != null) {
+      parts.push(<em key={key++} className="italic text-gray-300">{match[2]}</em>)
+    } else if (match[3] != null) {
+      parts.push(
+        <code key={key++} className="rounded px-1 py-0.5 text-xs font-mono"
+          style={{ backgroundColor: theme + '22', color: theme }}>{match[3]}</code>
+      )
+    }
+    lastIdx = match.index + match[0].length
+  }
+  if (lastIdx < text.length) parts.push(text.slice(lastIdx))
+  return parts.length === 0 ? '' : parts.length === 1 && typeof parts[0] === 'string' ? parts[0] : <>{parts}</>
+}
+
 function MarkdownContent({ content, theme }: { content: string; theme: string }): React.ReactElement {
-  return (
-    <ReactMarkdown
-      remarkPlugins={[remarkGfm]}
-      components={{
-        p: ({ children }) => <p className="my-0.5 leading-relaxed">{children}</p>,
-        ul: ({ children }) => <ul className="list-disc pl-4 space-y-0.5 my-1">{children}</ul>,
-        ol: ({ children }) => <ol className="list-decimal pl-4 space-y-0.5 my-1">{children}</ol>,
-        li: ({ children }) => <li className="leading-relaxed">{children}</li>,
-        strong: ({ children }) => <strong className="font-semibold text-white">{children}</strong>,
-        em: ({ children }) => <em className="italic text-gray-300">{children}</em>,
-        h1: ({ children }) => <h1 className="text-sm font-bold mt-1 mb-0.5 text-white">{children}</h1>,
-        h2: ({ children }) => <h2 className="text-sm font-semibold mt-1 mb-0.5 text-white">{children}</h2>,
-        h3: ({ children }) => <h3 className="text-xs font-semibold mt-0.5 mb-0.5 text-gray-200">{children}</h3>,
-        code: ({ children, className }) => {
-          const isBlock = className?.startsWith('language-')
-          if (isBlock) {
-            return (
-              <pre className="bg-[#0d1117] rounded-md px-3 py-2 overflow-x-auto text-xs font-mono mt-1 mb-1 border border-white/10">
-                <code>{children}</code>
-              </pre>
-            )
-          }
-          return (
-            <code
-              className="rounded px-1 py-0.5 text-xs font-mono"
-              style={{ backgroundColor: theme + '22', color: theme }}
-            >
-              {children}
-            </code>
-          )
-        },
-        pre: ({ children }) => <>{children}</>,
-        a: ({ children, href }) => (
-          <a
-            href={href}
-            className="underline underline-offset-2"
-            style={{ color: theme }}
-          >
-            {children}
-          </a>
-        ),
-        blockquote: ({ children }) => (
-          <blockquote
-            className="border-l-2 pl-3 my-1 text-gray-400 italic"
-            style={{ borderColor: theme + '66' }}
-          >
-            {children}
-          </blockquote>
-        ),
-        hr: () => <hr className="border-white/10 my-2" />,
-      }}
-    >
-      {content}
-    </ReactMarkdown>
-  )
+  const elements: React.ReactElement[] = []
+  const lines = content.split('\n')
+  let i = 0
+
+  while (i < lines.length) {
+    const line = lines[i]
+
+    // ── Fenced code block ─────────────────────────────────────────────
+    if (line.startsWith('```')) {
+      const codeLines: string[] = []
+      i++
+      while (i < lines.length && !lines[i].startsWith('```')) { codeLines.push(lines[i]); i++ }
+      elements.push(
+        <pre key={i} className="bg-[#0d1117] rounded-md px-3 py-2 overflow-x-auto text-xs font-mono mt-1 mb-1 border border-white/10">
+          <code>{codeLines.join('\n')}</code>
+        </pre>
+      )
+      i++; continue
+    }
+
+    // ── Headings ──────────────────────────────────────────────────────
+    if (line.startsWith('### ')) {
+      elements.push(<h3 key={i} className="text-xs font-semibold mt-1 text-gray-200">{renderInline(line.slice(4), theme)}</h3>)
+    } else if (line.startsWith('## ')) {
+      elements.push(<h2 key={i} className="text-sm font-semibold mt-1 mb-0.5 text-white">{renderInline(line.slice(3), theme)}</h2>)
+    } else if (line.startsWith('# ')) {
+      elements.push(<h1 key={i} className="text-sm font-bold mt-1 mb-0.5 text-white">{renderInline(line.slice(2), theme)}</h1>)
+    }
+
+    // ── Bullet list ───────────────────────────────────────────────────
+    else if (/^[-*] /.test(line)) {
+      const items: React.ReactElement[] = []
+      while (i < lines.length && /^[-*] /.test(lines[i])) {
+        items.push(<li key={i} className="leading-relaxed">{renderInline(lines[i].slice(2), theme)}</li>)
+        i++
+      }
+      elements.push(<ul key={`ul-${i}`} className="list-disc pl-4 space-y-0.5 my-1">{items}</ul>)
+      continue
+    }
+
+    // ── Numbered list ─────────────────────────────────────────────────
+    else if (/^\d+\. /.test(line)) {
+      const items: React.ReactElement[] = []
+      while (i < lines.length && /^\d+\. /.test(lines[i])) {
+        items.push(<li key={i} className="leading-relaxed">{renderInline(lines[i].replace(/^\d+\. /, ''), theme)}</li>)
+        i++
+      }
+      elements.push(<ol key={`ol-${i}`} className="list-decimal pl-4 space-y-0.5 my-1">{items}</ol>)
+      continue
+    }
+
+    // ── Blockquote ────────────────────────────────────────────────────
+    else if (line.startsWith('> ')) {
+      elements.push(
+        <blockquote key={i} className="border-l-2 pl-3 my-1 text-gray-400 italic"
+          style={{ borderColor: theme + '66' }}>
+          {renderInline(line.slice(2), theme)}
+        </blockquote>
+      )
+    }
+
+    // ── Horizontal rule ───────────────────────────────────────────────
+    else if (/^(-{3,}|\*{3,}|_{3,})$/.test(line.trim())) {
+      elements.push(<hr key={i} className="border-white/10 my-2" />)
+    }
+
+    // ── Empty line → slight gap ───────────────────────────────────────
+    else if (line.trim() === '') {
+      if (elements.length > 0) elements.push(<div key={i} className="h-1" />)
+    }
+
+    // ── Paragraph ─────────────────────────────────────────────────────
+    else {
+      elements.push(<p key={i} className="my-0.5 leading-relaxed">{renderInline(line, theme)}</p>)
+    }
+
+    i++
+  }
+
+  return <>{elements}</>
 }
 
 // ---------------------------------------------------------------------------
