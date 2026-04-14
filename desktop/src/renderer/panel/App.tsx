@@ -5,6 +5,8 @@
  */
 
 import React, { useEffect, useRef, useState } from 'react'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import type { CompanionStatus, OrbConfig } from '../../shared/types'
 
 // ---------------------------------------------------------------------------
@@ -40,6 +42,68 @@ function Dot({ state, theme }: { state: string; theme: string }): React.ReactEle
       className={`inline-block w-2 h-2 rounded-full flex-shrink-0 ${pulse ? 'animate-pulse' : ''}`}
       style={{ backgroundColor: color }}
     />
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Markdown renderer — used for assistant messages
+// ---------------------------------------------------------------------------
+
+function MarkdownContent({ content, theme }: { content: string; theme: string }): React.ReactElement {
+  return (
+    <ReactMarkdown
+      remarkPlugins={[remarkGfm]}
+      components={{
+        p: ({ children }) => <p className="my-0.5 leading-relaxed">{children}</p>,
+        ul: ({ children }) => <ul className="list-disc pl-4 space-y-0.5 my-1">{children}</ul>,
+        ol: ({ children }) => <ol className="list-decimal pl-4 space-y-0.5 my-1">{children}</ol>,
+        li: ({ children }) => <li className="leading-relaxed">{children}</li>,
+        strong: ({ children }) => <strong className="font-semibold text-white">{children}</strong>,
+        em: ({ children }) => <em className="italic text-gray-300">{children}</em>,
+        h1: ({ children }) => <h1 className="text-sm font-bold mt-1 mb-0.5 text-white">{children}</h1>,
+        h2: ({ children }) => <h2 className="text-sm font-semibold mt-1 mb-0.5 text-white">{children}</h2>,
+        h3: ({ children }) => <h3 className="text-xs font-semibold mt-0.5 mb-0.5 text-gray-200">{children}</h3>,
+        code: ({ children, className }) => {
+          const isBlock = className?.startsWith('language-')
+          if (isBlock) {
+            return (
+              <pre className="bg-[#0d1117] rounded-md px-3 py-2 overflow-x-auto text-xs font-mono mt-1 mb-1 border border-white/10">
+                <code>{children}</code>
+              </pre>
+            )
+          }
+          return (
+            <code
+              className="rounded px-1 py-0.5 text-xs font-mono"
+              style={{ backgroundColor: theme + '22', color: theme }}
+            >
+              {children}
+            </code>
+          )
+        },
+        pre: ({ children }) => <>{children}</>,
+        a: ({ children, href }) => (
+          <a
+            href={href}
+            className="underline underline-offset-2"
+            style={{ color: theme }}
+          >
+            {children}
+          </a>
+        ),
+        blockquote: ({ children }) => (
+          <blockquote
+            className="border-l-2 pl-3 my-1 text-gray-400 italic"
+            style={{ borderColor: theme + '66' }}
+          >
+            {children}
+          </blockquote>
+        ),
+        hr: () => <hr className="border-white/10 my-2" />,
+      }}
+    >
+      {content}
+    </ReactMarkdown>
   )
 }
 
@@ -120,22 +184,23 @@ function PttButton({
 
 function ChatTab({
   messages, streaming, liveTranscript, transcribing, status, listening, textInput, theme, orbName,
-  setTextInput, onPress, onRelease, onTextSubmit, onClear,
+  wakeWordEnabled, setTextInput, onPress, onRelease, onTextSubmit, onClear,
 }: {
-  messages:      UIMessage[]
-  streaming:     string
-  liveTranscript:string
-  transcribing:  boolean
-  status:        CompanionStatus
-  listening:     boolean
-  textInput:     string
-  theme:         string
-  orbName:       string
-  setTextInput:  (v: string) => void
-  onPress:       () => void
-  onRelease:     () => void
-  onTextSubmit:  (e: React.FormEvent) => void
-  onClear:       () => void
+  messages:        UIMessage[]
+  streaming:       string
+  liveTranscript:  string
+  transcribing:    boolean
+  status:          CompanionStatus
+  listening:       boolean
+  textInput:       string
+  theme:           string
+  orbName:         string
+  wakeWordEnabled: boolean
+  setTextInput:    (v: string) => void
+  onPress:         () => void
+  onRelease:       () => void
+  onTextSubmit:    (e: React.FormEvent) => void
+  onClear:         () => void
 }): React.ReactElement {
   const bottomRef = useRef<HTMLDivElement>(null)
   const { state, error } = status
@@ -154,7 +219,11 @@ function ChatTab({
         {messages.length === 0 && !streaming && !error && (
           <div className="flex flex-col items-center justify-center h-full text-gray-500 text-sm space-y-2 pb-4">
             <p className="text-3xl">🎙️</p>
-            <p>Hold <kbd className="px-1.5 py-0.5 rounded bg-gray-700 text-xs font-mono">Ctrl+Shift+Space</kbd> and speak</p>
+            {wakeWordEnabled ? (
+              <p>Say <span className="font-mono text-xs px-1.5 py-0.5 rounded bg-gray-700">Hey {orbName}</span> to activate</p>
+            ) : (
+              <p>Hold <kbd className="px-1.5 py-0.5 rounded bg-gray-700 text-xs font-mono">Ctrl+Shift+Space</kbd> and speak</p>
+            )}
             <p className="text-xs opacity-60">or type below — {orbName} is ready</p>
           </div>
         )}
@@ -183,7 +252,9 @@ function ChatTab({
               }`}
               style={msg.role === 'user' ? { backgroundColor: theme + 'cc' } : undefined}
             >
-              {msg.content}
+              {msg.role === 'assistant'
+                ? <MarkdownContent content={msg.content} theme={theme} />
+                : msg.content}
               {msg.role === 'assistant' && (
                 <div className="mt-1 flex justify-end">
                   <CopyButton text={msg.content} theme={theme} />
@@ -197,7 +268,7 @@ function ChatTab({
         {streaming && (
           <div className="flex justify-start">
             <div className="max-w-[88%] bg-[#1a2130] rounded-xl rounded-bl-sm px-3 py-2 text-sm leading-relaxed text-gray-100">
-              {streaming}
+              <MarkdownContent content={streaming} theme={theme} />
               <span className="animate-pulse ml-0.5">▋</span>
             </div>
           </div>
@@ -437,6 +508,38 @@ function SettingsTab({
           Your AI + TTS proxy server. API keys live there, never here.
         </p>
       </section>
+
+      {/* Wake word */}
+      <section>
+        <div className="flex items-center justify-between">
+          <div>
+            <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider">
+              Wake word
+            </p>
+            <p className="text-xs text-gray-600 mt-0.5">
+              Say &ldquo;Hey {config.name}&rdquo; to activate
+            </p>
+          </div>
+          <button
+            role="switch"
+            aria-checked={config.wakeWordEnabled}
+            onClick={() => onSaveConfig({ wakeWordEnabled: !config.wakeWordEnabled })}
+            className="relative flex-shrink-0 w-10 h-6 rounded-full transition-colors duration-200 focus:outline-none"
+            style={{ backgroundColor: config.wakeWordEnabled ? config.theme : '#374151' }}
+          >
+            <span
+              className="absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full shadow transition-transform duration-200"
+              style={{ transform: config.wakeWordEnabled ? 'translateX(16px)' : 'translateX(0)' }}
+            />
+          </button>
+        </div>
+        {config.wakeWordEnabled && (
+          <p className="text-xs mt-2 px-3 py-2 rounded-lg bg-[#161b22] border border-white/10"
+             style={{ color: config.theme }}>
+            Listening… speak &ldquo;Hey {config.name}, [your question]&rdquo;
+          </p>
+        )}
+      </section>
     </div>
   )
 }
@@ -455,7 +558,7 @@ export function App(): React.ReactElement {
   const [listening,     setListening]      = useState(false)
   const [textInput,     setTextInput]      = useState('')
   const [tab,           setTab]            = useState<Tab>('chat')
-  const [orbCfg,        setOrbCfg]         = useState<OrbConfig>({ name: 'Mwongozo', theme: '#10b981', personality: 'friendly' })
+  const [orbCfg,        setOrbCfg]         = useState<OrbConfig>({ name: 'Mwongozo', theme: '#10b981', personality: 'friendly', wakeWordEnabled: false })
   const [proxyUrl,      setProxyUrlState]  = useState('http://localhost:8787')
 
   const [transcribing,  setTranscribing]  = useState(false)
@@ -464,12 +567,23 @@ export function App(): React.ReactElement {
   const mediaRecorderRef  = useRef<MediaRecorder | null>(null)
   const audioChunksRef    = useRef<Blob[]>([])
   const transcribingRef   = useRef(false)   // mirrors `transcribing` for stale-closure safety
+  const wakeRecognitionRef = useRef<SpeechRecognition | null>(null)
+  const wakeActiveRef      = useRef(false)   // true while wake-word listener is running
+  const orbCfgRef          = useRef(orbCfg)  // always-current config inside callbacks
+  const statusRef          = useRef(status)
 
   // ── bootstrap ──────────────────────────────────────────────────────────────
   useEffect(() => {
     window.api.getStatus().then(setStatus)
     window.api.getOrbConfig().then(setOrbCfg)
     window.api.getProxyUrl().then(setProxyUrlState)
+
+    // Restore persisted conversation history
+    window.api.getHistory().then((history) => {
+      if (history.length > 0) {
+        setMessages(history.map((m) => ({ id: uid(), role: m.role, content: m.content })))
+      }
+    })
 
     const subs = [
       window.api.onStatus((s) => {
@@ -507,6 +621,91 @@ export function App(): React.ReactElement {
 
     return () => subs.forEach((u) => u())
   }, [])
+
+  // Keep always-current refs in sync for use inside callbacks
+  useEffect(() => { orbCfgRef.current = orbCfg }, [orbCfg])
+  useEffect(() => { statusRef.current = status  }, [status])
+
+  // ── Wake word detection ────────────────────────────────────────────────────
+
+  useEffect(() => {
+    if (orbCfg.wakeWordEnabled) {
+      startWakeWord()
+    } else {
+      stopWakeWord()
+    }
+    return () => stopWakeWord()
+  }, [orbCfg.wakeWordEnabled])
+
+  function startWakeWord(): void {
+    if (wakeActiveRef.current) return
+    const SpeechRecognitionAPI = window.webkitSpeechRecognition ?? SpeechRecognition
+    if (!SpeechRecognitionAPI) {
+      console.warn('[wake-word] Web Speech API not available in this environment')
+      return
+    }
+
+    const recognition = new SpeechRecognitionAPI()
+    recognition.continuous     = true
+    recognition.interimResults = true
+    recognition.lang           = 'en-US'
+
+    recognition.onresult = (event: SpeechRecognitionEvent): void => {
+      // Only act when not already busy
+      if (statusRef.current.state !== 'idle' || transcribingRef.current) return
+
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const t       = event.results[i][0].transcript.trim().toLowerCase()
+        const name    = orbCfgRef.current.name.toLowerCase()
+        const isFinal = event.results[i].isFinal
+
+        // Match "hey mwongozo" or "hey <custom-name>" in either interim or final
+        const wakeIdx = t.indexOf(`hey ${name}`)
+        if (wakeIdx < 0) continue
+
+        // On final result: extract the query following the wake phrase
+        if (isFinal) {
+          const after = t.slice(wakeIdx + `hey ${name}`.length).trim()
+          if (after) {
+            setMessages((prev) => [...prev, { id: uid(), role: 'user', content: after }])
+            streamingRef.current = ''
+            setStreaming('')
+            window.api.submitQuery(after)
+          }
+        }
+        break
+      }
+    }
+
+    recognition.onerror = (e: SpeechRecognitionErrorEvent): void => {
+      // "no-speech" fires often in silence — just restart silently
+      if (e.error !== 'no-speech') console.warn('[wake-word] error:', e.error)
+    }
+
+    recognition.onend = (): void => {
+      // Restart automatically while still enabled
+      if (orbCfgRef.current.wakeWordEnabled && wakeActiveRef.current) {
+        try { recognition.start() } catch { /* already starting */ }
+      }
+    }
+
+    try {
+      recognition.start()
+      wakeRecognitionRef.current = recognition
+      wakeActiveRef.current      = true
+      console.info('[wake-word] listening for "Hey ' + orbCfgRef.current.name + '"')
+    } catch (e) {
+      console.warn('[wake-word] Could not start recognition:', e)
+    }
+  }
+
+  function stopWakeWord(): void {
+    if (!wakeActiveRef.current) return
+    wakeActiveRef.current = false
+    try { wakeRecognitionRef.current?.stop() } catch { /* ignore */ }
+    wakeRecognitionRef.current = null
+    console.info('[wake-word] stopped')
+  }
 
   // ── MediaRecorder-based voice input ───────────────────────────────────────
 
@@ -708,6 +907,7 @@ export function App(): React.ReactElement {
           textInput={textInput}
           theme={theme}
           orbName={orbName}
+          wakeWordEnabled={orbCfg.wakeWordEnabled}
           setTextInput={setTextInput}
           onPress={handlePress}
           onRelease={handleRelease}

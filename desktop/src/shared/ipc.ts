@@ -57,4 +57,8 @@ export const IPC = {
 
   // Voice transcription (renderer → main → proxy AssemblyAI)
   TRANSCRIBE_AUDIO: 'transcribe:audio',
+
+  // Persistent conversation history (renderer ↔ main)
+  HISTORY_GET:   'history:get',    // renderer invoke → main returns Message[]
+  HISTORY_CLEAR: 'history:clear',  // renderer invoke → main deletes file
 } as const

@@ -10,6 +10,7 @@ interface Schema {
   orbName: string
   orbTheme: string
   orbPersonality: OrbConfig['personality']
+  orbWakeWord: boolean
 }
 
 const store = new Store<Schema>({
@@ -20,6 +21,7 @@ const store = new Store<Schema>({
     orbName: 'Mwongozo',
     orbTheme: '#10b981',
     orbPersonality: 'friendly',
+    orbWakeWord: false,
   },
 })
 
@@ -33,14 +35,16 @@ export function setProxyUrl(url: string): void {
 
 export function getOrbConfig(): OrbConfig {
   return {
-    name:        store.get('orbName'),
-    theme:       store.get('orbTheme'),
-    personality: store.get('orbPersonality'),
+    name:            store.get('orbName'),
+    theme:           store.get('orbTheme'),
+    personality:     store.get('orbPersonality'),
+    wakeWordEnabled: store.get('orbWakeWord'),
   }
 }
 
 export function setOrbConfig(cfg: Partial<OrbConfig>): void {
-  if (cfg.name        !== undefined) store.set('orbName',        cfg.name)
-  if (cfg.theme       !== undefined) store.set('orbTheme',       cfg.theme)
-  if (cfg.personality !== undefined) store.set('orbPersonality', cfg.personality)
+  if (cfg.name            !== undefined) store.set('orbName',        cfg.name)
+  if (cfg.theme           !== undefined) store.set('orbTheme',       cfg.theme)
+  if (cfg.personality     !== undefined) store.set('orbPersonality', cfg.personality)
+  if (cfg.wakeWordEnabled !== undefined) store.set('orbWakeWord',    cfg.wakeWordEnabled)
 }

@@ -12,6 +12,8 @@ export interface OrbConfig {
   name: string
   theme: string   // hex colour, e.g. "#10b981"
   personality: 'friendly' | 'professional' | 'playful' | 'concise'
+  /** When true, continuous speech recognition listens for "Hey Mwongozo" */
+  wakeWordEnabled: boolean
 }
 
 /** Parsed [POINT:x,y:label:screenN] or [STEP:n:x,y:label:screenN] tag from Claude response */

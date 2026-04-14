@@ -17,7 +17,9 @@
  * Conversation history: last 10 turns kept in memory.
  */
 
-import { BrowserWindow, ipcMain } from 'electron'
+import { app, BrowserWindow, ipcMain } from 'electron'
+import * as fs from 'fs'
+import * as path from 'path'
 import { IPC } from '../shared/ipc'
 import type { CompanionState, CompanionStatus, Message, PointTarget } from '../shared/types'
 import { captureScreen } from './screenshot'
@@ -37,12 +39,53 @@ export class CompanionManager {
   private error = ''
   private history: Message[] = []
 
+  private readonly historyFile = path.join(
+    app.getPath('home'), '.mwongozo', 'history.json',
+  )
+
   constructor(
     private readonly panelWindow: BrowserWindow,
     private readonly overlayWindow: BrowserWindow,
   ) {
     setTtsWindow(panelWindow)
+    this.loadHistory()
     this.registerIpc()
+  }
+
+  // ---------------------------------------------------------------------------
+  // History persistence
+  // ---------------------------------------------------------------------------
+
+  private loadHistory(): void {
+    try {
+      if (!fs.existsSync(this.historyFile)) return
+      const raw = fs.readFileSync(this.historyFile, 'utf-8')
+      const data = JSON.parse(raw) as { messages?: Message[] }
+      if (Array.isArray(data.messages)) {
+        this.history = data.messages.slice(-MAX_HISTORY * 2)
+        console.info(`[companion] Loaded ${this.history.length} history messages from disk`)
+      }
+    } catch (e) {
+      console.warn('[companion] Could not load history:', e)
+    }
+  }
+
+  private saveHistory(): void {
+    try {
+      const dir = path.dirname(this.historyFile)
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
+      fs.writeFileSync(
+        this.historyFile,
+        JSON.stringify({ messages: this.history }, null, 2),
+        'utf-8',
+      )
+    } catch (e) {
+      console.warn('[companion] Could not save history:', e)
+    }
+  }
+
+  getHistory(): Message[] {
+    return this.history
   }
 
   // ---------------------------------------------------------------------------
@@ -88,6 +131,7 @@ export class CompanionManager {
 
   reset(): void {
     this.history = []
+    this.saveHistory()
     this.responseText = ''
     this.transcript = ''
     this.error = ''
@@ -177,6 +221,7 @@ export class CompanionManager {
     if (this.history.length > MAX_HISTORY * 2) {
       this.history = this.history.slice(-MAX_HISTORY * 2)
     }
+    this.saveHistory()
 
     // Signal panel and overlay that streaming is complete
     if (!this.panelWindow.isDestroyed())   this.panelWindow.webContents.send(IPC.CLAUDE_DONE)
@@ -324,5 +369,7 @@ export class CompanionManager {
     ipcMain.handle(IPC.GET_STATUS,   () => this.getStatus())
     ipcMain.handle(IPC.RESET,        () => this.reset())
     ipcMain.handle(IPC.MANUAL_QUERY, (_, text: string) => this.onManualQuery(text))
+    ipcMain.handle(IPC.HISTORY_GET,  () => this.getHistory())
+    ipcMain.handle(IPC.HISTORY_CLEAR, () => { this.history = []; this.saveHistory() })
   }
 }
