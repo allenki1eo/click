@@ -1,305 +1,261 @@
 /**
- * Overlay renderer — mirrors OverlayWindow.swift.
+ * Overlay renderer — full-screen transparent window drawn over everything.
  *
- * Full-screen transparent window. Shows:
- * - An animated cursor that navigates to the target (x, y) position
- * - A text bubble with the AI instruction nearby
- * - Click effect when cursor reaches the target
+ * Shows an animated Mac-style cursor that glides from the orb corner to the
+ * AI-identified target coordinate, then rings pulse at the landing point.
  *
- * The window is mouse-transparent (setIgnoreMouseEvents in main/overlay.ts)
- * so it never interferes with the user's workflow.
+ * Design principles:
+ * - SVG cursor with hotspot at (0,0) so tip lands exactly on the coordinate
+ * - CSS `transform: translate(x,y)` — GPU-accelerated, no rAF loop needed
+ * - Spring cubic-bezier (ease-out with tiny overshoot) matches macOS feel
+ * - Cursor emerges from bottom-right (orb area), travels to target
+ * - Bubble text fades in only after cursor arrives
+ * - Theme colour from OrbConfig so rings match the orb
  */
 
-import React, { useEffect, useState, useRef } from 'react'
-import type { PointTarget } from '../../shared/types'
+import React, { useEffect, useRef, useState } from 'react'
+import type { OrbConfig, PointTarget } from '../../shared/types'
 
-interface OverlayState {
-  point: PointTarget | null
-  text: string
-  visible: boolean
+// ── Mac-style arrow cursor SVG ──────────────────────────────────────────────
+// Tip is at (0,0) so translate(x,y) positions it exactly at the target.
+// Shape mirrors the macOS default cursor (northwest arrow).
+function CursorSvg({ theme }: { theme: string }): React.ReactElement {
+  return (
+    <svg
+      width="28" height="34"
+      viewBox="0 0 28 34"
+      fill="none"
+      xmlns="http://www.w3.org/2000/svg"
+      style={{ display: 'block' }}
+    >
+      {/* Drop shadow layer — slightly offset, semi-transparent */}
+      <path
+        d="M1.5 2.5 L1.5 24 L7 17.5 L11.5 28.5 L15.5 27 L11 16 L19.5 16 Z"
+        fill="rgba(0,0,0,0.28)"
+      />
+      {/* White fill */}
+      <path
+        d="M0 0 L0 21.5 L5.5 15 L10 26 L14 24.5 L9.5 13.5 L18 13.5 Z"
+        fill="white"
+      />
+      {/* Dark outline */}
+      <path
+        d="M0 0 L0 21.5 L5.5 15 L10 26 L14 24.5 L9.5 13.5 L18 13.5 Z"
+        stroke="#111"
+        strokeWidth="1.25"
+        strokeLinejoin="round"
+      />
+      {/* Accent dot at tip — matches orb theme colour */}
+      <circle cx="0" cy="0" r="3.5" fill={theme} opacity="0.95" />
+    </svg>
+  )
 }
 
-interface CursorState {
-  x: number
-  y: number
-  rotation: number
-  isAnimating: boolean
-  hasReachedTarget: boolean
+// ── ripple ring (one ring) ───────────────────────────────────────────────────
+function Ring({
+  delay, theme,
+}: { delay: number; theme: string }): React.ReactElement {
+  return (
+    <span style={{
+      position: 'absolute',
+      borderRadius: '50%',
+      border: `1.5px solid ${theme}`,
+      width: 56, height: 56,
+      top: -28, left: -28,
+      animation: `orbRipple 1.6s ease-out ${delay}s infinite`,
+      pointerEvents: 'none',
+    }} />
+  )
 }
 
+// ── main component ──────────────────────────────────────────────────────────
 export function App(): React.ReactElement {
-  const [overlay, setOverlay] = useState<OverlayState>({ point: null, text: '', visible: false })
-  const [cursor, setCursor] = useState<CursorState>({
-    x: window.innerWidth / 2,
-    y: window.innerHeight / 2,
-    rotation: 0,
-    isAnimating: false,
-    hasReachedTarget: false,
-  })
-  const animationRef = useRef<number | null>(null)
-  const cursorRef = useRef<HTMLDivElement>(null)
+  const [visible,      setVisible]      = useState(false)
+  const [target,       setTarget]       = useState<PointTarget | null>(null)
+  const [bubbleText,   setBubbleText]   = useState('')
+  const [arrived,      setArrived]      = useState(false)
+  const [theme,        setTheme]        = useState('#10b981')
 
+  // Cursor position — driven entirely by CSS transition on `transform`
+  const [pos,          setPos]          = useState({ x: 0, y: 0 })
+  const [animated,     setAnimated]     = useState(false)  // enables the CSS transition
+
+  const arrivalTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // ── load theme colour ──────────────────────────────────────────────────────
   useEffect(() => {
+    window.api.getOrbConfig().then((cfg: OrbConfig) => setTheme(cfg.theme))
     const subs = [
-      window.api.onOverlayPoint((p) => {
-        // Start cursor from center of screen
-        const startX = window.innerWidth / 2
-        const startY = window.innerHeight / 2
+      window.api.onOrbConfig((cfg: OrbConfig) => setTheme(cfg.theme)),
 
-        setCursor({
-          x: startX,
-          y: startY,
-          rotation: calculateRotation(startX, startY, p.x, p.y),
-          isAnimating: true,
-          hasReachedTarget: false,
+      window.api.onOverlayPoint((p: PointTarget) => {
+        if (arrivalTimer.current) clearTimeout(arrivalTimer.current)
+
+        // Reset arrived / text so they don't flash from a previous call
+        setArrived(false)
+        setBubbleText('')
+
+        // Step 1 — place cursor at start (bottom-right, near orb), NO transition
+        const startX = window.innerWidth  - 54
+        const startY = window.innerHeight - 54
+        setAnimated(false)
+        setPos({ x: startX, y: startY })
+        setTarget(p)
+        setVisible(true)
+
+        // Step 2 — two rAFs ensure the browser paints the starting position
+        //          before we switch on the CSS transition and set the target pos
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            setAnimated(true)
+            setPos({ x: p.x, y: p.y })
+
+            // Arrival fires after animation duration (860 ms)
+            arrivalTimer.current = setTimeout(() => setArrived(true), 860)
+          })
         })
-
-        setOverlay((prev) => ({ ...prev, point: p, visible: true }))
-
-        // Animate cursor to target
-        animateCursorToTarget(startX, startY, p.x, p.y)
       }),
-      window.api.onOverlayText((t) => {
-        setOverlay((prev) => ({ ...prev, text: t }))
+
+      window.api.onOverlayText((t: string) => {
+        // Store the full response; show it (or the POINT label) in the bubble
+        setBubbleText(t)
       }),
+
       window.api.onOverlayHide(() => {
-        if (animationRef.current) {
-          cancelAnimationFrame(animationRef.current)
-          animationRef.current = null
-        }
-        setOverlay({ point: null, text: '', visible: false })
-        setCursor({
-          x: window.innerWidth / 2,
-          y: window.innerHeight / 2,
-          rotation: 0,
-          isAnimating: false,
-          hasReachedTarget: false,
-        })
+        if (arrivalTimer.current) clearTimeout(arrivalTimer.current)
+        setVisible(false)
+        setTarget(null)
+        setBubbleText('')
+        setArrived(false)
+        setAnimated(false)
       }),
     ]
     return () => subs.forEach((u) => u())
   }, [])
 
-  // Calculate rotation angle for cursor to point toward target
-  function calculateRotation(fromX: number, fromY: number, toX: number, toY: number): number {
-    const dx = toX - fromX
-    const dy = toY - fromY
-    return (Math.atan2(dy, dx) * 180) / Math.PI + 90 // +90 because cursor points up by default
-  }
+  if (!visible || !target) return <></>
 
-  // Animate cursor from start to target with easing
-  function animateCursorToTarget(startX: number, startY: number, targetX: number, targetY: number) {
-    const duration = 1200 // ms - smooth animation duration
-    const startTime = performance.now()
-    const rotation = calculateRotation(startX, startY, targetX, targetY)
-
-    // Easing function: easeOutCubic for smooth deceleration
-    const easeOutCubic = (t: number) => 1 - Math.pow(1 - t, 3)
-
-    const animate = (currentTime: number) => {
-      const elapsed = currentTime - startTime
-      const progress = Math.min(elapsed / duration, 1)
-      const easedProgress = easeOutCubic(progress)
-
-      const currentX = startX + (targetX - startX) * easedProgress
-      const currentY = startY + (targetY - startY) * easedProgress
-
-      setCursor({
-        x: currentX,
-        y: currentY,
-        rotation: rotation,
-        isAnimating: progress < 1,
-        hasReachedTarget: progress >= 1,
-      })
-
-      if (progress < 1) {
-        animationRef.current = requestAnimationFrame(animate)
-      }
-    }
-
-    if (animationRef.current) {
-      cancelAnimationFrame(animationRef.current)
-    }
-    animationRef.current = requestAnimationFrame(animate)
-  }
-
-  if (!overlay.visible || !overlay.point) return <></>
-
-  const { x: targetX, y: targetY, label } = overlay.point
-  const bubbleText = label || overlay.text
-
-  // Decide whether bubble appears above or below the cursor
-  const bubbleAbove = targetY > window.innerHeight / 2
+  // ── bubble positioning ────────────────────────────────────────────────────
+  const label = target.label || bubbleText
+  const bubbleW    = 230
+  const bubbleAbove = target.y > window.innerHeight * 0.55
+  const bubbleLeft  = Math.min(
+    Math.max(target.x - bubbleW / 2, 12),
+    window.innerWidth - bubbleW - 12,
+  )
+  const bubbleTop   = bubbleAbove
+    ? target.y - 94
+    : target.y + 34
+  // Arrow tip x relative to bubble container
+  const arrowOffset = Math.min(
+    Math.max(target.x - bubbleLeft - 9, 14),
+    bubbleW - 28,
+  )
 
   return (
-    <div className="fixed inset-0 pointer-events-none overflow-hidden">
-      {/* Animated Cursor Arrow - Simple and visible */}
+    <div style={{
+      position: 'fixed', inset: 0,
+      pointerEvents: 'none', overflow: 'hidden',
+    }}>
+
+      {/* ── animated cursor ─────────────────────────────────────────────── */}
       <div
-        ref={cursorRef}
-        className="absolute z-50"
         style={{
-          left: cursor.x,
-          top: cursor.y,
-          transform: `translate(-50%, -50%) rotate(${cursor.rotation}deg)`,
+          position: 'absolute',
+          left: 0, top: 0,
+          // `transform` is the only property that changes — pure GPU layer
+          transform: `translate(${pos.x}px, ${pos.y}px)`,
+          transition: animated
+            ? 'transform 0.86s cubic-bezier(0.22, 1, 0.36, 1)'
+            : 'none',
+          willChange: 'transform',
           pointerEvents: 'none',
+          zIndex: 60,
+          // Drop shadow on the whole cursor group
+          filter: 'drop-shadow(0 3px 8px rgba(0,0,0,0.45))',
         }}
       >
-        {/* Simple cursor arrow using CSS shapes - more reliable than SVG */}
-        <div
-          style={{
-            width: 0,
-            height: 0,
-            borderLeft: '10px solid transparent',
-            borderRight: '10px solid transparent',
-            borderBottom: '24px solid #10B981',
-            filter: 'drop-shadow(2px 2px 3px rgba(0,0,0,0.5))',
-          }}
-        />
-        {/* Cursor outline/highlight */}
-        <div
-          style={{
-            position: 'absolute',
-            top: 1,
-            left: -9,
-            width: 0,
-            height: 0,
-            borderLeft: '9px solid transparent',
-            borderRight: '9px solid transparent',
-            borderBottom: '22px solid white',
-            zIndex: -1,
-          }}
-        />
-
-        {/* Cursor trail dots during animation */}
-        {cursor.isAnimating && (
-          <>
-            <span
-              className="absolute rounded-full bg-green-400"
-              style={{
-                width: 10,
-                height: 10,
-                top: -30,
-                left: -5,
-                opacity: 0.4,
-                animation: 'cursorTrail 0.4s ease-out forwards',
-              }}
-            />
-            <span
-              className="absolute rounded-full bg-green-400"
-              style={{
-                width: 8,
-                height: 8,
-                top: -50,
-                left: -4,
-                opacity: 0.3,
-                animation: 'cursorTrail 0.5s ease-out forwards',
-              }}
-            />
-            <span
-              className="absolute rounded-full bg-green-400"
-              style={{
-                width: 6,
-                height: 6,
-                top: -65,
-                left: -3,
-                opacity: 0.2,
-                animation: 'cursorTrail 0.6s ease-out forwards',
-              }}
-            />
-          </>
-        )}
+        <CursorSvg theme={theme} />
       </div>
 
-      {/* Target indicator - shows when cursor reaches destination */}
-      {cursor.hasReachedTarget && (
-        <div
-          className="absolute pointer-events-none"
-          style={{
-            left: targetX,
-            top: targetY,
-            transform: 'translate(-50%, -50%)',
-          }}
-        >
-          {/* Ripple effect at target */}
-          <span
-            className="absolute inline-flex rounded-full bg-green-400 opacity-75 animate-ping"
-            style={{ width: 50, height: 50, top: -25, left: -25 }}
-          />
-          <span
-            className="absolute inline-flex rounded-full bg-green-500"
-            style={{
-              width: 40,
-              height: 40,
-              top: -20,
-              left: -20,
-              opacity: 0.5,
-              animation: 'targetPulse 1.5s ease-in-out infinite',
-              borderRadius: '50%',
-            }}
-          />
-          {/* Target dot */}
-          <span
-            className="relative inline-block rounded-full bg-green-400"
-            style={{
-              width: 16,
-              height: 16,
-              top: -8,
-              left: -8,
-              boxShadow: '0 0 15px 5px rgba(16,185,129,0.7)',
-            }}
-          />
+      {/* ── ripple rings at target — appear on arrival ──────────────────── */}
+      {arrived && (
+        <div style={{
+          position: 'absolute',
+          left: target.x, top: target.y,
+          pointerEvents: 'none',
+          zIndex: 55,
+        }}>
+          <Ring delay={0}    theme={theme} />
+          <Ring delay={0.55} theme={theme} />
+          {/* Centre dot */}
+          <span style={{
+            position: 'absolute',
+            borderRadius: '50%',
+            backgroundColor: theme,
+            width: 9, height: 9,
+            top: -4.5, left: -4.5,
+            boxShadow: `0 0 14px 5px ${theme}55`,
+            animation: 'dotPulse 2s ease-in-out infinite',
+          }} />
         </div>
       )}
 
-      {/* Text bubble */}
-      {bubbleText && (
-        <div
-          className="absolute max-w-xs px-4 py-3 rounded-xl text-sm text-white leading-snug shadow-2xl"
-          style={{
-            left: Math.min(Math.max(targetX - 100, 8), window.innerWidth - 230),
-            top: bubbleAbove ? targetY - 12 - 70 : targetY + 30,
-            background: 'rgba(17,24,39,0.95)',
-            border: '2px solid rgba(16,185,129,0.6)',
-            backdropFilter: 'blur(8px)',
-            boxShadow: '0 4px 20px rgba(0,0,0,0.4)',
-          }}
-        >
-          {bubbleText}
-          {/* Arrow pointing toward cursor */}
-          <span
-            className="absolute w-0 h-0"
-            style={{
-              left: Math.min(Math.max(targetX - Math.min(Math.max(targetX - 100, 8), window.innerWidth - 230) - 8, 8), 180),
-              [bubbleAbove ? 'bottom' : 'top']: -10,
-              borderLeft: '10px solid transparent',
-              borderRight: '10px solid transparent',
-              [bubbleAbove ? 'borderTop' : 'borderBottom']: '10px solid rgba(17,24,39,0.95)',
-            }}
-          />
+      {/* ── text bubble — fades in on arrival ───────────────────────────── */}
+      {arrived && label && (
+        <div style={{
+          position: 'absolute',
+          left: bubbleLeft,
+          top: bubbleTop,
+          width: bubbleW,
+          padding: '9px 13px',
+          borderRadius: 11,
+          background: 'rgba(10,14,20,0.96)',
+          border: `1.5px solid ${theme}55`,
+          backdropFilter: 'blur(14px)',
+          WebkitBackdropFilter: 'blur(14px)',
+          boxShadow: '0 6px 28px rgba(0,0,0,0.55)',
+          color: '#f0f4f8',
+          fontSize: 12.5,
+          lineHeight: 1.55,
+          fontFamily: 'system-ui, -apple-system, sans-serif',
+          animation: 'bubbleFadeIn 0.3s ease forwards',
+          pointerEvents: 'none',
+          zIndex: 65,
+          // Limit to label text (short) not the full response (long)
+          maxHeight: 110,
+          overflow: 'hidden',
+        }}>
+          {/* Show label if present, otherwise first sentence of response */}
+          {target.label || (bubbleText.length > 100
+            ? bubbleText.slice(0, bubbleText.lastIndexOf(' ', 100)) + '…'
+            : bubbleText)}
+
+          {/* Bubble arrow */}
+          <span style={{
+            position: 'absolute',
+            left: arrowOffset,
+            [bubbleAbove ? 'bottom' : 'top']: -9,
+            borderLeft: '9px solid transparent',
+            borderRight: '9px solid transparent',
+            [bubbleAbove ? 'borderTop' : 'borderBottom']: '9px solid rgba(10,14,20,0.96)',
+          }} />
         </div>
       )}
 
-      {/* CSS animations */}
+      {/* ── CSS keyframes ────────────────────────────────────────────────── */}
       <style>{`
-        @keyframes cursorTrail {
-          0% {
-            transform: scale(1) translateY(0);
-            opacity: 0.5;
-          }
-          100% {
-            transform: scale(0) translateY(-30px);
-            opacity: 0;
-          }
+        @keyframes orbRipple {
+          0%   { transform: scale(0.2); opacity: 0.9; }
+          100% { transform: scale(2.2); opacity: 0;   }
         }
-        @keyframes targetPulse {
-          0%, 100% {
-            transform: scale(1);
-            opacity: 0.5;
-          }
-          50% {
-            transform: scale(1.3);
-            opacity: 0.3;
-          }
+        @keyframes dotPulse {
+          0%, 100% { transform: scale(1);   opacity: 1;   }
+          50%       { transform: scale(1.4); opacity: 0.7; }
+        }
+        @keyframes bubbleFadeIn {
+          from { opacity: 0; transform: translateY(5px); }
+          to   { opacity: 1; transform: translateY(0);   }
         }
       `}</style>
     </div>
