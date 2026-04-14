@@ -43,6 +43,30 @@ function CursorSvg({ theme }: { theme: string }): React.ReactElement {
   )
 }
 
+// ── Bounding highlight box ───────────────────────────────────────────────────
+// Drawn around the detected element centre point.  Width/height are a
+// reasonable default for typical UI controls (buttons, inputs, links).
+const HIGHLIGHT_W = 220
+const HIGHLIGHT_H = 52
+
+function HighlightBox({ x, y, theme }: { x: number; y: number; theme: string }): React.ReactElement {
+  return (
+    <div style={{
+      position: 'absolute',
+      left:   x - HIGHLIGHT_W / 2,
+      top:    y - HIGHLIGHT_H / 2,
+      width:  HIGHLIGHT_W,
+      height: HIGHLIGHT_H,
+      border: `2px solid ${theme}`,
+      borderRadius: 9,
+      boxShadow: `0 0 0 4px ${theme}28, 0 0 20px 6px ${theme}44`,
+      animation: 'highlightPulse 1.6s ease-in-out infinite',
+      pointerEvents: 'none',
+      zIndex: 54,
+    }} />
+  )
+}
+
 // ── Ripple ring ─────────────────────────────────────────────────────────────
 function Ring({ delay, theme }: { delay: number; theme: string }): React.ReactElement {
   return (
@@ -281,6 +305,11 @@ export function App(): React.ReactElement {
         </div>
       )}
 
+      {/* ── Bounding highlight box around detected element ───────────────── */}
+      {pointVisible && arrived && target && (
+        <HighlightBox x={target.x} y={target.y} theme={theme} />
+      )}
+
       {/* ── Ripple rings + dot at target ────────────────────────────────── */}
       {pointVisible && arrived && target && (
         <div style={{
@@ -323,7 +352,7 @@ export function App(): React.ReactElement {
           maxHeight: 110, overflow: 'hidden',
         }}>
           {/* Step badge — only shown for multi-step sequences (Feature 3) */}
-          {isMultiStep && target.stepIndex != null && target.stepTotal != null && (
+          {isMultiStep && target && target.stepIndex != null && target.stepTotal != null && (
             <StepBadge
               stepIndex={target.stepIndex}
               stepTotal={target.stepTotal}
@@ -365,6 +394,10 @@ export function App(): React.ReactElement {
         @keyframes streamCursor {
           0%, 100% { opacity: 1; }
           50%       { opacity: 0; }
+        }
+        @keyframes highlightPulse {
+          0%, 100% { opacity: 1;   }
+          50%       { opacity: 0.6; }
         }
       `}</style>
     </div>
