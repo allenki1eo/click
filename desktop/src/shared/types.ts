@@ -14,12 +14,16 @@ export interface OrbConfig {
   personality: 'friendly' | 'professional' | 'playful' | 'concise'
 }
 
-/** Parsed [POINT:x,y:label:screenN] tag from Claude response */
+/** Parsed [POINT:x,y:label:screenN] or [STEP:n:x,y:label:screenN] tag from Claude response */
 export interface PointTarget {
   x: number
   y: number
   label: string
   screenIndex: number
+  /** 1-based step number when part of a multi-step sequence */
+  stepIndex?: number
+  /** Total number of steps in the sequence */
+  stepTotal?: number
 }
 
 /** Full UI state pushed to the renderer on every state change */

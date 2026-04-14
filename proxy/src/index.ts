@@ -378,16 +378,30 @@ async function handleDetect(request: Request, env: Env): Promise<Response> {
     displayHeight:    number
     cuWidth:          number   // dimensions the screenshot was resized to
     cuHeight:         number
+    appContext?:      string   // "VS Code — App.tsx (file: App.tsx)" — Feature 1
   }
 
-  const { screenshotBase64, userQuestion, displayWidth, displayHeight, cuWidth, cuHeight } = body
+  const { screenshotBase64, userQuestion, displayWidth, displayHeight, cuWidth, cuHeight, appContext } = body
 
+  // ── Feature 1: include active app context in the detection prompt ──────────
+  const appLine = appContext ? `\nActive application: ${appContext}\n` : ''
+
+  // ── Feature 3: ask Claude to identify the FIRST click target precisely ─────
+  // For multi-step tasks the GLM model returns [STEP:n:...] tags with all steps.
+  // The CU model's job is to pin step 1 with pixel-perfect accuracy — it has
+  // specialised training for this that GLM lacks.
   const prompt =
-    `The user asked: "${userQuestion}"\n\n` +
-    `Look at the screenshot. If there is a specific UI element (button, link, menu item, ` +
-    `text field, icon, etc.) the user should interact with or is asking about, click on it. ` +
-    `If the question is purely conceptual and there is no specific element to point to, ` +
-    `respond with plain text saying "no element".`
+    `The user asked: "${userQuestion}"${appLine}\n` +
+    `Read ALL text visible in the screenshot carefully.\n\n` +
+    `Your task: identify the FIRST UI element the user needs to interact with ` +
+    `to fulfil their request, then click on it using the computer tool.\n\n` +
+    `Rules:\n` +
+    `• Click the exact centre of the element (button, link, menu item, icon, toggle, etc.).\n` +
+    `• If the task requires multiple steps, click the FIRST step only — ` +
+    `  the app will re-invoke you for subsequent steps.\n` +
+    `• If the question is purely informational with no clickable target, ` +
+    `  respond with plain text: "no element".\n` +
+    `• Do NOT explain your reasoning — just use the computer tool (or say "no element").`
 
   const upstream = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
@@ -425,10 +439,14 @@ async function handleDetect(request: Request, env: Env): Promise<Response> {
     })
   }
 
-  const data = await upstream.json() as { content?: Array<{ type: string; input?: { coordinate?: number[] } }> }
+  const data = await upstream.json() as { content?: Array<{ type: string; input?: { coordinate?: number[]; action?: string } }> }
 
   for (const block of data.content ?? []) {
-    if (block.type === 'tool_use' && Array.isArray(block.input?.coordinate) && block.input.coordinate.length === 2) {
+    if (
+      block.type === 'tool_use' &&
+      Array.isArray(block.input?.coordinate) &&
+      block.input.coordinate.length === 2
+    ) {
       const [cuX, cuY] = block.input.coordinate
       // Clamp to declared resolution
       const cx = Math.max(0, Math.min(cuX, cuWidth))
