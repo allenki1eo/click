@@ -2,16 +2,19 @@
  * Mwongozo Proxy — Cloudflare Worker
  *
  * Routes:
- * POST /chat → AI model (OpenRouter OR BigModel.cn)
- * POST /tts → ElevenLabs text-to-speech
- * POST /transcribe-token → AssemblyAI short-lived token
+ * POST /chat       → AI model (OpenRouter OR BigModel.cn)
+ * POST /tts        → ElevenLabs text-to-speech
+ * POST /transcribe → Voice transcription (Groq Whisper preferred, AssemblyAI fallback)
+ * POST /detect     → Claude Computer Use API for UI element coordinates
  *
  * Environment Variables:
- * - OPENROUTER_API_KEY: For OpenRouter models
- * - BIGMODEL_API_KEY: For GLM-5V-Turbo on BigModel.cn
- * - ELEVENLABS_API_KEY: For text-to-speech
+ * - OPENROUTER_API_KEY:  For OpenRouter models
+ * - BIGMODEL_API_KEY:    For GLM-5V-Turbo on BigModel.cn
+ * - ELEVENLABS_API_KEY:  For text-to-speech
  * - ELEVENLABS_VOICE_ID: Default voice ID
- * - ASSEMBLYAI_API_KEY: For transcription
+ * - GROQ_API_KEY:        Preferred transcription (Whisper via Groq, ~1s)
+ * - ASSEMBLYAI_API_KEY:  Fallback transcription (upload+poll, ~10s)
+ * - ANTHROPIC_API_KEY:   Computer Use API for accurate coordinate detection
  */
 
 interface Env {
@@ -21,8 +24,9 @@ interface Env {
   // TTS
   ELEVENLABS_API_KEY: string
   ELEVENLABS_VOICE_ID: string
-  // Transcription
-  ASSEMBLYAI_API_KEY: string
+  // Transcription — Groq is preferred (fast, ~1s); AssemblyAI is fallback (~10s)
+  GROQ_API_KEY?:      string
+  ASSEMBLYAI_API_KEY?: string
   // Computer Use element detection (optional — falls back to POINT tag parsing)
   ANTHROPIC_API_KEY?: string
 }
@@ -194,18 +198,17 @@ async function handleTts(request: Request, env: Env): Promise<Response> {
 }
 
 // ---------------------------------------------------------------------------
-// /transcribe — Full AssemblyAI pipeline: upload → submit → poll → return text
-// Client POSTs raw audio bytes; proxy handles all API calls with the server key.
+// /transcribe — Voice-to-text pipeline
+//
+// Provider priority:
+//   1. Groq Whisper   (GROQ_API_KEY)    — ~1s, multipart/form-data
+//   2. AssemblyAI     (ASSEMBLYAI_API_KEY) — ~10s, upload → poll
+//
+// Client POSTs raw audio bytes (audio/webm;codecs=opus from MediaRecorder).
+// Returns JSON { text: string }.
 // ---------------------------------------------------------------------------
 
 async function handleTranscribe(request: Request, env: Env): Promise<Response> {
-  if (!env.ASSEMBLYAI_API_KEY) {
-    return ok(JSON.stringify({ error: 'ASSEMBLYAI_API_KEY not configured. Add it to Worker secrets.' }), {
-      status: 500,
-      headers: { 'content-type': 'application/json' },
-    })
-  }
-
   const audioBuffer = await request.arrayBuffer()
   if (!audioBuffer.byteLength) {
     return ok(JSON.stringify({ error: 'No audio data received', text: '' }), {
@@ -214,6 +217,28 @@ async function handleTranscribe(request: Request, env: Env): Promise<Response> {
     })
   }
   console.info(`[transcribe] Received ${audioBuffer.byteLength} bytes`)
+
+  // ── Groq Whisper (preferred — fast, ~1s) ──────────────────────────────────
+  if (env.GROQ_API_KEY) {
+    try {
+      const text = await transcribeWithGroq(audioBuffer, env.GROQ_API_KEY)
+      console.info('[transcribe] Groq completed:', text || '(empty)')
+      return ok(JSON.stringify({ text }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      })
+    } catch (err) {
+      console.error('[transcribe] Groq failed, falling back to AssemblyAI:', String(err))
+    }
+  }
+
+  // ── AssemblyAI fallback (upload → submit → poll, ~10s) ───────────────────
+  if (!env.ASSEMBLYAI_API_KEY) {
+    return ok(JSON.stringify({
+      error: 'No transcription provider configured. Add GROQ_API_KEY (recommended) or ASSEMBLYAI_API_KEY to .dev.vars',
+      text: '',
+    }), { status: 500, headers: { 'content-type': 'application/json' } })
+  }
 
   const auth = env.ASSEMBLYAI_API_KEY
 
@@ -225,13 +250,14 @@ async function handleTranscribe(request: Request, env: Env): Promise<Response> {
   })
   if (!uploadRes.ok) {
     const err = await uploadRes.text()
-    return ok(JSON.stringify({ error: `Upload failed: ${err}`, text: '' }), {
+    console.error('[transcribe] AssemblyAI upload failed:', uploadRes.status, err)
+    return ok(JSON.stringify({ error: `AssemblyAI upload failed (${uploadRes.status}): ${err}`, text: '' }), {
       status: 500,
       headers: { 'content-type': 'application/json' },
     })
   }
   const { upload_url } = await uploadRes.json() as { upload_url: string }
-  console.info('[transcribe] Audio uploaded')
+  console.info('[transcribe] AssemblyAI audio uploaded')
 
   // Step 2: Submit transcription job
   const txRes = await fetch('https://api.assemblyai.com/v2/transcript', {
@@ -241,13 +267,14 @@ async function handleTranscribe(request: Request, env: Env): Promise<Response> {
   })
   if (!txRes.ok) {
     const err = await txRes.text()
-    return ok(JSON.stringify({ error: `Transcript submit failed: ${err}`, text: '' }), {
+    console.error('[transcribe] AssemblyAI submit failed:', txRes.status, err)
+    return ok(JSON.stringify({ error: `AssemblyAI submit failed (${txRes.status}): ${err}`, text: '' }), {
       status: 500,
       headers: { 'content-type': 'application/json' },
     })
   }
   const { id } = await txRes.json() as { id: string }
-  console.info('[transcribe] Job submitted, ID:', id)
+  console.info('[transcribe] AssemblyAI job submitted, ID:', id)
 
   // Step 3: Poll until completed (max 20 × 1.5s = 30s)
   for (let i = 0; i < 20; i++) {
@@ -256,27 +283,58 @@ async function handleTranscribe(request: Request, env: Env): Promise<Response> {
       headers: { authorization: auth },
     })
     const data = await poll.json() as { status: string; text?: string; error?: string }
+    console.info(`[transcribe] AssemblyAI status: ${data.status} (${i + 1}/20)`)
     if (data.status === 'completed') {
       const text = data.text?.trim() ?? ''
-      console.info('[transcribe] Completed:', text || '(empty)')
+      console.info('[transcribe] AssemblyAI completed:', text || '(empty)')
       return ok(JSON.stringify({ text }), {
         status: 200,
         headers: { 'content-type': 'application/json' },
       })
     }
     if (data.status === 'error') {
+      console.error('[transcribe] AssemblyAI error:', data.error)
       return ok(JSON.stringify({ error: `AssemblyAI: ${data.error}`, text: '' }), {
         status: 500,
         headers: { 'content-type': 'application/json' },
       })
     }
-    console.info(`[transcribe] Status: ${data.status} (${i + 1}/20)`)
   }
 
-  return ok(JSON.stringify({ error: 'Transcription timed out', text: '' }), {
+  return ok(JSON.stringify({ error: 'Transcription timed out after 30s', text: '' }), {
     status: 500,
     headers: { 'content-type': 'application/json' },
   })
+}
+
+// ---------------------------------------------------------------------------
+// Groq Whisper transcription — fast (~1s), supports audio/webm natively
+// API: https://console.groq.com/docs/speech-text
+// ---------------------------------------------------------------------------
+
+async function transcribeWithGroq(audioBuffer: ArrayBuffer, apiKey: string): Promise<string> {
+  // Groq uses the OpenAI-compatible audio transcription endpoint
+  // It requires multipart/form-data with the audio as a file field
+  const formData = new FormData()
+  const audioBlob = new Blob([audioBuffer], { type: 'audio/webm' })
+  formData.append('file', audioBlob, 'recording.webm')
+  formData.append('model', 'whisper-large-v3-turbo')  // fastest Groq Whisper model
+  formData.append('response_format', 'json')
+
+  const res = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${apiKey}` },
+    // Do NOT set Content-Type — fetch sets it automatically with the correct boundary
+    body: formData,
+  })
+
+  if (!res.ok) {
+    const err = await res.text()
+    throw new Error(`Groq ${res.status}: ${err}`)
+  }
+
+  const data = await res.json() as { text?: string }
+  return data.text?.trim() ?? ''
 }
 
 // ---------------------------------------------------------------------------
