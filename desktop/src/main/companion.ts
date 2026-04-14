@@ -23,7 +23,9 @@ import * as path from 'path'
 import { IPC } from '../shared/ipc'
 import type { CompanionState, CompanionStatus, Message, PointTarget } from '../shared/types'
 import { captureScreen } from './screenshot'
+import type { Screenshot } from './screenshot'
 import { getActiveAppContext, formatAppContext } from './appContext'
+import type { AppContext } from './appContext'
 import { streamGuidance } from '../services/claude'
 import { speak, setTtsWindow } from '../services/tts'
 import { getProxyUrl, getOrbConfig } from './config'
@@ -43,13 +45,40 @@ export class CompanionManager {
     app.getPath('home'), '.mwongozo', 'history.json',
   )
 
+  /**
+   * Pre-capture started on PTT press / wake-word trigger so screenshot +
+   * app context are ready the moment transcription arrives — instead of
+   * adding their latency on top of it.
+   */
+  private preCapturePromise: Promise<[Screenshot | null, AppContext]> | null = null
+
+  /** Most-recently cached app context, refreshed every 2 s in background. */
+  private cachedAppContext: AppContext = { appName: 'Unknown', windowTitle: '' }
+
   constructor(
     private readonly panelWindow: BrowserWindow,
     private readonly overlayWindow: BrowserWindow,
   ) {
     setTtsWindow(panelWindow)
     this.loadHistory()
+    this.startAppContextPoller()
     this.registerIpc()
+  }
+
+  // ---------------------------------------------------------------------------
+  // Background app-context poller — keeps cachedAppContext fresh so it's
+  // instantly available when a query arrives (avoids blocking on AppleScript /
+  // PowerShell in the hot path).
+  // ---------------------------------------------------------------------------
+
+  private startAppContextPoller(): void {
+    const refresh = (): void => {
+      getActiveAppContext()
+        .then((ctx) => { this.cachedAppContext = ctx })
+        .catch(() => {/* stay with last known */})
+    }
+    refresh()                          // prime immediately on startup
+    setInterval(refresh, 2_000)        // keep fresh every 2 s
   }
 
   // ---------------------------------------------------------------------------
@@ -99,6 +128,17 @@ export class CompanionManager {
     this.error = ''
     this.setState('listening')
     this.broadcast(IPC.HOTKEY_PRESS)
+    // Start screenshot while user speaks — amortises capture time over
+    // the recording so it's ready when transcription comes back.
+    this.startPreCapture()
+  }
+
+  /** Kick off screenshot + app-context fetch in the background. */
+  private startPreCapture(): void {
+    this.preCapturePromise = Promise.all([
+      captureScreen().catch(() => null),
+      Promise.resolve(this.cachedAppContext),   // instant — already polled
+    ])
   }
 
   /** Release signals the renderer to stop recording — pipeline runs via onManualQuery */
@@ -120,6 +160,9 @@ export class CompanionManager {
     this.transcript = q
     this.responseText = ''
     this.error = ''
+    // If PTT didn't pre-capture (e.g. typed query), start it now so at least
+    // the screenshot overlaps with any remaining async setup.
+    if (!this.preCapturePromise) this.startPreCapture()
     this.setState('processing')
     this.runPipeline(q).catch((err: unknown) => {
       const msg = err instanceof Error ? err.message : String(err)
@@ -146,11 +189,17 @@ export class CompanionManager {
   private async runPipeline(question: string): Promise<void> {
     const proxy = getProxyUrl()
 
-    // 1. Screenshot + active-app context in parallel (Feature 1)
-    const [screenshotData, appContext] = await Promise.all([
-      captureScreen(),
-      getActiveAppContext(),
+    // 1. Use pre-captured data (started on PTT press while user was speaking),
+    //    falling back to a fresh capture only if pre-capture wasn't triggered.
+    const pending = this.preCapturePromise ?? Promise.all([
+      captureScreen().catch(() => null) as Promise<Screenshot | null>,
+      Promise.resolve(this.cachedAppContext),
     ])
+    this.preCapturePromise = null
+
+    const [screenshotData, appContext] = await pending
+    if (!screenshotData) throw new Error('Screen capture failed — check permissions')
+
 
     const {
       base64: screenshot,
