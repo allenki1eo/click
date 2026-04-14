@@ -30,6 +30,13 @@ export const IPC = {
   OVERLAY_POINT: 'overlay:point',
   OVERLAY_TEXT:  'overlay:text',
 
+  // Overlay streaming response (main → overlay renderer)
+  // Shows AI response text as a floating bubble near the cursor while streaming,
+  // so the user never has to look away from their work (clicky-style UX).
+  OVERLAY_RESPONSE_START: 'overlay:response:start',  // {x,y} display-local cursor pos
+  OVERLAY_RESPONSE_CHUNK: 'overlay:response:chunk',  // string chunk to append
+  OVERLAY_RESPONSE_DONE:  'overlay:response:done',   // streaming complete
+
   // Orb ↔ main
   CURSOR_MOVE:   'cursor:move',    // main → orb renderer (16 ms poll)
   ORB_CLICK:     'orb:click',      // orb renderer → main (toggle panel)
