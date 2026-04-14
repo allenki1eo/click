@@ -3,12 +3,16 @@
  *
  * States: idle → listening → processing → responding → idle
  *
- * Pipeline (mirrors clicky's two-stage parallel approach):
- *   1. Capture screenshot (logical-px for GLM + CU-resolution for Computer Use)
+ * Pipeline:
+ *   1. captureScreen() + getActiveAppContext() run in parallel
  *   2a. streamGuidance()  — streams text to panel + overlay bubble near cursor
+ *       Includes app context (Feature 1) + OCR instruction (Feature 2)
  *   2b. detectElementLocation() — parallel Computer Use API call for coordinates
  *   3. TTS plays + awaits detection result
- *   4. Overlay cursor animates to detected point (CU preferred, POINT tag fallback)
+ *   4. Overlay cursor animates to detected point(s):
+ *      - Single step: CU preferred, POINT tag fallback
+ *      - Multi-step:  STEP tags shown sequentially with 3.5 s between each
+ *        (Feature 3)
  *
  * Conversation history: last 10 turns kept in memory.
  */
@@ -17,11 +21,14 @@ import { BrowserWindow, ipcMain } from 'electron'
 import { IPC } from '../shared/ipc'
 import type { CompanionState, CompanionStatus, Message, PointTarget } from '../shared/types'
 import { captureScreen } from './screenshot'
+import { getActiveAppContext, formatAppContext } from './appContext'
 import { streamGuidance } from '../services/claude'
 import { speak, setTtsWindow } from '../services/tts'
 import { getProxyUrl, getOrbConfig } from './config'
 
 const MAX_HISTORY = 10
+/** Delay between multi-step overlay targets (ms) */
+const STEP_DWELL_MS = 3500
 
 export class CompanionManager {
   private state: CompanionState = 'idle'
@@ -95,7 +102,12 @@ export class CompanionManager {
   private async runPipeline(question: string): Promise<void> {
     const proxy = getProxyUrl()
 
-    // 1. Screenshot — returns both full-res (for GLM) and CU-res (for Computer Use)
+    // 1. Screenshot + active-app context in parallel (Feature 1)
+    const [screenshotData, appContext] = await Promise.all([
+      captureScreen(),
+      getActiveAppContext(),
+    ])
+
     const {
       base64: screenshot,
       base64Cu,
@@ -106,13 +118,18 @@ export class CompanionManager {
       cursorLocalX,
       cursorLocalY,
       displayBounds,
-    } = await captureScreen()
+    } = screenshotData
+
+    if (appContext.appName !== 'Unknown') {
+      console.info(`[companion] Active app: ${appContext.appName} — "${appContext.windowTitle}"`)
+    }
 
     // 2b. Start element detection immediately (runs in background while text streams)
-    //     Uses Claude Computer Use API — far more accurate than vision-model POINT tags.
+    //     Uses Claude Computer Use API — more accurate than vision-model POINT tags.
     //     Falls back to null if ANTHROPIC_API_KEY is not configured in the proxy.
+    const appContextStr = formatAppContext(appContext)
     const detectionPromise = this.detectElementLocation(
-      base64Cu, question, displayBounds, cuWidth, cuHeight,
+      base64Cu, question, displayBounds, cuWidth, cuHeight, appContextStr || undefined,
     ).catch(() => null)
 
     // 2a. Stream text response to panel + floating overlay bubble near cursor
@@ -120,13 +137,14 @@ export class CompanionManager {
     const { personality } = getOrbConfig()
     let firstChunk = true
 
-    const { text, point: fallbackPoint } = await streamGuidance({
+    const { text, point: fallbackPoint, steps: glmSteps } = await streamGuidance({
       screenshotBase64: screenshot,
       transcript:       question,
       history:          this.history,
       proxyUrl:         proxy,
       screenWidth,      screenHeight,
       personality,
+      appContext,                            // Feature 1: active app context
       onChunk: (chunk) => {
         this.responseText += chunk
 
@@ -140,7 +158,7 @@ export class CompanionManager {
           if (firstChunk) {
             firstChunk = false
             this.overlayWindow.setBounds(displayBounds)
-            this.overlayWindow.showInactive()  // show without stealing focus
+            this.overlayWindow.showInactive()
             this.overlayWindow.webContents.send(IPC.OVERLAY_RESPONSE_START, {
               x: cursorLocalX,
               y: cursorLocalY,
@@ -151,7 +169,7 @@ export class CompanionManager {
       },
     })
 
-    // 3. Update conversation history (strip POINT tags before storing)
+    // 3. Update conversation history (POINT/STEP tags already stripped by parsePointTag)
     this.history.push(
       { role: 'user',      content: question },
       { role: 'assistant', content: text },
@@ -161,20 +179,32 @@ export class CompanionManager {
     }
 
     // Signal panel and overlay that streaming is complete
-    if (!this.panelWindow.isDestroyed())  this.panelWindow.webContents.send(IPC.CLAUDE_DONE)
+    if (!this.panelWindow.isDestroyed())   this.panelWindow.webContents.send(IPC.CLAUDE_DONE)
     if (!this.overlayWindow.isDestroyed()) this.overlayWindow.webContents.send(IPC.OVERLAY_RESPONSE_DONE)
 
     // 4. TTS + await detection result in parallel
-    //    Detection started before streaming began, so it's usually ready by now.
     this.setState('responding')
     const [, detectedPoint] = await Promise.all([
       speak(text, proxy),
       detectionPromise,
     ])
 
-    // 5. Show overlay cursor — prefer Computer Use result; fallback to POINT tag
-    const point = detectedPoint ?? fallbackPoint
-    if (point) this.showOverlayPoint(point, displayBounds)
+    // 5. Decide which points to show
+    //
+    //    Multi-step (Feature 3): if GLM returned ≥2 STEP tags, show them all
+    //    in sequence.  CU detection is still used for step 1 (highest accuracy).
+    //
+    //    Single step: prefer CU result; fallback to GLM POINT tag.
+    if (glmSteps.length >= 2) {
+      // Inject CU coordinate into step 1 if detection succeeded
+      const steps = glmSteps.map((s, i) =>
+        i === 0 && detectedPoint ? { ...s, x: detectedPoint.x, y: detectedPoint.y } : s
+      )
+      await this.showOverlaySteps(steps, displayBounds)
+    } else {
+      const point = detectedPoint ?? fallbackPoint
+      if (point) this.showOverlayPoint(point, displayBounds)
+    }
 
     // 6. Done
     this.setState('idle')
@@ -191,6 +221,7 @@ export class CompanionManager {
     displayBounds:      Electron.Rectangle,
     cuWidth:            number,
     cuHeight:           number,
+    appContextStr?:     string,
   ): Promise<PointTarget | null> {
     const proxy = getProxyUrl()
     const res = await fetch(`${proxy}/detect`, {
@@ -203,6 +234,7 @@ export class CompanionManager {
         displayHeight:    displayBounds.height,
         cuWidth,
         cuHeight,
+        appContext:       appContextStr,
       }),
     })
     if (!res.ok) return null
@@ -222,6 +254,33 @@ export class CompanionManager {
     this.overlayWindow.webContents.send(IPC.OVERLAY_POINT, point)
     this.overlayWindow.webContents.send(IPC.OVERLAY_TEXT, this.responseText)
     this.overlayWindow.show()
+  }
+
+  /**
+   * Multi-step overlay (Feature 3) — animate cursor to each step target in
+   * order, showing a "Step N / Total" badge.  Waits STEP_DWELL_MS between
+   * each so the user has time to read the label before the next step fires.
+   */
+  private async showOverlaySteps(
+    steps:         PointTarget[],
+    displayBounds: Electron.Rectangle,
+  ): Promise<void> {
+    if (this.overlayWindow.isDestroyed() || !steps.length) return
+
+    this.overlayWindow.setBounds(displayBounds)
+    this.overlayWindow.show()
+
+    // Stamp stepTotal onto every item (GLM already sets it but CU-merged step won't have it)
+    const total = steps.length
+    const stamped = steps.map((s, i) => ({ ...s, stepIndex: i + 1, stepTotal: total }))
+
+    for (const step of stamped) {
+      if (this.overlayWindow.isDestroyed()) break
+      this.overlayWindow.webContents.send(IPC.OVERLAY_POINT, step)
+      this.overlayWindow.webContents.send(IPC.OVERLAY_TEXT, step.label)
+      console.info(`[companion] Multi-step ${step.stepIndex}/${step.stepTotal}: "${step.label}" → (${step.x}, ${step.y})`)
+      await new Promise<void>((r) => setTimeout(r, STEP_DWELL_MS))
+    }
   }
 
   private hideOverlay(): void {

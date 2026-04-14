@@ -1,19 +1,22 @@
 /**
  * Overlay renderer — full-screen transparent window drawn over everything.
  *
- * Two layers (both use the same full-screen transparent window):
+ * Three layers (same full-screen transparent window):
  *
  *  1. Stream bubble — appears near the cursor as soon as the AI starts
- *     responding. Shows the streaming text so the user never has to look
- *     away from their work (mirrors clicky's CompanionResponseOverlay).
+ *     responding. Shows streaming text so the user never looks away.
  *     Auto-hides 8 s after streaming completes if no POINT arrived.
  *
  *  2. Cursor animation — a Mac-style SVG arrow cursor glides from the orb
  *     corner to the AI-identified target coordinate, then ripple rings pulse
- *     at the landing spot.  Only fires when the AI returned a POINT.
+ *     at the landing spot.  Only fires when the AI returned a POINT/STEP.
+ *
+ *  3. Step counter badge (Feature 3) — when the AI returns multi-step STEP
+ *     tags, a "Step N / Total" badge with progress dots appears above the
+ *     target bubble so the user always knows where they are in the sequence.
  *
  * Coordinate accuracy:
- *   The main process now runs a parallel Claude Computer Use API call whose
+ *   The main process runs a parallel Claude Computer Use API call whose
  *   coordinates are used in preference to the GLM POINT tag.  Both land in
  *   the same display-local logical-pixel space — the overlay window is
  *   positioned to the captured display's bounds so CSS translate(x,y) maps
@@ -50,6 +53,53 @@ function Ring({ delay, theme }: { delay: number; theme: string }): React.ReactEl
       animation: `orbRipple 1.6s ease-out ${delay}s infinite`,
       pointerEvents: 'none',
     }} />
+  )
+}
+
+// ── Step counter badge (Feature 3 — multi-step actions) ─────────────────────
+function StepBadge({
+  stepIndex, stepTotal, theme,
+}: { stepIndex: number; stepTotal: number; theme: string }): React.ReactElement {
+  return (
+    <div style={{
+      position: 'absolute',
+      top: -44,
+      left: '50%',
+      transform: 'translateX(-50%)',
+      display: 'flex',
+      alignItems: 'center',
+      gap: 7,
+      background: 'rgba(10,14,20,0.93)',
+      border: `1px solid ${theme}44`,
+      borderRadius: 20,
+      padding: '4px 11px 4px 10px',
+      pointerEvents: 'none',
+      whiteSpace: 'nowrap',
+      animation: 'bubbleFadeIn 0.2s ease forwards',
+    }}>
+      <span style={{
+        fontSize: 11,
+        fontFamily: 'system-ui, -apple-system, sans-serif',
+        color: theme,
+        fontWeight: 700,
+        letterSpacing: '0.03em',
+      }}>
+        Step {stepIndex} / {stepTotal}
+      </span>
+      {/* Progress dots */}
+      <span style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+        {Array.from({ length: stepTotal }, (_, i) => (
+          <span key={i} style={{
+            width: i + 1 === stepIndex ? 8 : 6,
+            height: i + 1 === stepIndex ? 8 : 6,
+            borderRadius: '50%',
+            backgroundColor: i + 1 <= stepIndex ? theme : `${theme}33`,
+            transition: 'all 0.3s ease',
+            boxShadow: i + 1 === stepIndex ? `0 0 6px 2px ${theme}66` : 'none',
+          }} />
+        ))}
+      </span>
+    </div>
   )
 }
 
@@ -143,7 +193,7 @@ export function App(): React.ReactElement {
         streamHideRef.current = setTimeout(() => setStreaming(false), 8_000)
       }),
 
-      // ── Pointing cursor animation ──────────────────────────────────────
+      // ── Pointing cursor animation (single step OR each step in multi-step) ──
       window.api.onOverlayPoint((p: PointTarget) => {
         // Hide stream bubble — pointing cursor takes over as response indicator
         if (streamHideRef.current) clearTimeout(streamHideRef.current)
@@ -203,6 +253,8 @@ export function App(): React.ReactElement {
     Math.max(target.x - bubbleLeft - 9, 14),
     bubbleW - 28,
   ) : 0
+
+  const isMultiStep = (target?.stepTotal ?? 0) >= 2
 
   return (
     <div style={{ position: 'fixed', inset: 0, pointerEvents: 'none', overflow: 'hidden' }}>
@@ -270,6 +322,15 @@ export function App(): React.ReactElement {
           zIndex: 65,
           maxHeight: 110, overflow: 'hidden',
         }}>
+          {/* Step badge — only shown for multi-step sequences (Feature 3) */}
+          {isMultiStep && target.stepIndex != null && target.stepTotal != null && (
+            <StepBadge
+              stepIndex={target.stepIndex}
+              stepTotal={target.stepTotal}
+              theme={theme}
+            />
+          )}
+
           {/* Prefer short label; truncate long full-response text */}
           {target?.label || (bubbleText.length > 100
             ? bubbleText.slice(0, bubbleText.lastIndexOf(' ', 100)) + '\u2026'
