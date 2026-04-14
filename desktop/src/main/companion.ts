@@ -3,13 +3,12 @@
  *
  * States: idle → listening → processing → responding → idle
  *
- * Voice path (new):
- *   onPress() sets state=listening; the renderer uses the Web Speech API to
- *   get a transcript, then calls submitQuery() — exactly like typed text.
- *   onRelease() therefore only broadcasts HOTKEY_RELEASE so the renderer
- *   knows to stop its speech recognition; no pipeline runs here.
- *
- * Text path: onManualQuery() — accepts typed text OR Web-Speech transcript.
+ * Pipeline (mirrors clicky's two-stage parallel approach):
+ *   1. Capture screenshot (logical-px for GLM + CU-resolution for Computer Use)
+ *   2a. streamGuidance()  — streams text to panel + overlay bubble near cursor
+ *   2b. detectElementLocation() — parallel Computer Use API call for coordinates
+ *   3. TTS plays + awaits detection result
+ *   4. Overlay cursor animates to detected point (CU preferred, POINT tag fallback)
  *
  * Conversation history: last 10 turns kept in memory.
  */
@@ -52,7 +51,7 @@ export class CompanionManager {
     this.broadcast(IPC.HOTKEY_PRESS)
   }
 
-  /** Release just signals the renderer to stop Web Speech — pipeline runs via onManualQuery */
+  /** Release signals the renderer to stop recording — pipeline runs via onManualQuery */
   onRelease(): void {
     if (this.state !== 'listening') return
     this.setState('idle')
@@ -60,11 +59,11 @@ export class CompanionManager {
   }
 
   // ---------------------------------------------------------------------------
-  // Manual text / Web-Speech transcript query
+  // Manual text / voice transcript query
   // ---------------------------------------------------------------------------
 
   onManualQuery(text: string): void {
-    // Accept 'idle' AND 'listening' (Web-Speech can finish before key is released)
+    // Accept 'idle' AND 'listening' (transcript can arrive before key is released)
     if (this.state !== 'idle' && this.state !== 'listening') return
     const q = text.trim()
     if (!q) return
@@ -96,29 +95,63 @@ export class CompanionManager {
   private async runPipeline(question: string): Promise<void> {
     const proxy = getProxyUrl()
 
-    // 1. Screenshot (returns base64 + logical pixel dimensions + display bounds)
-    const { base64: screenshot, width: screenWidth, height: screenHeight, displayBounds } = await captureScreen()
+    // 1. Screenshot — returns both full-res (for GLM) and CU-res (for Computer Use)
+    const {
+      base64: screenshot,
+      base64Cu,
+      width: screenWidth,
+      height: screenHeight,
+      cuWidth,
+      cuHeight,
+      cursorLocalX,
+      cursorLocalY,
+      displayBounds,
+    } = await captureScreen()
 
-    // 2. Stream AI response
+    // 2b. Start element detection immediately (runs in background while text streams)
+    //     Uses Claude Computer Use API — far more accurate than vision-model POINT tags.
+    //     Falls back to null if ANTHROPIC_API_KEY is not configured in the proxy.
+    const detectionPromise = this.detectElementLocation(
+      base64Cu, question, displayBounds, cuWidth, cuHeight,
+    ).catch(() => null)
+
+    // 2a. Stream text response to panel + floating overlay bubble near cursor
     this.responseText = ''
     const { personality } = getOrbConfig()
-    const { text, point } = await streamGuidance({
+    let firstChunk = true
+
+    const { text, point: fallbackPoint } = await streamGuidance({
       screenshotBase64: screenshot,
       transcript:       question,
       history:          this.history,
       proxyUrl:         proxy,
-      screenWidth,
-      screenHeight,
+      screenWidth,      screenHeight,
       personality,
       onChunk: (chunk) => {
         this.responseText += chunk
+
+        // Send chunk to chat panel
         if (!this.panelWindow.isDestroyed()) {
           this.panelWindow.webContents.send(IPC.CLAUDE_CHUNK, chunk)
+        }
+
+        // On first chunk: show overlay + position stream bubble at cursor
+        if (!this.overlayWindow.isDestroyed()) {
+          if (firstChunk) {
+            firstChunk = false
+            this.overlayWindow.setBounds(displayBounds)
+            this.overlayWindow.showInactive()  // show without stealing focus
+            this.overlayWindow.webContents.send(IPC.OVERLAY_RESPONSE_START, {
+              x: cursorLocalX,
+              y: cursorLocalY,
+            })
+          }
+          this.overlayWindow.webContents.send(IPC.OVERLAY_RESPONSE_CHUNK, chunk)
         }
       },
     })
 
-    // 3. Update conversation history
+    // 3. Update conversation history (strip POINT tags before storing)
     this.history.push(
       { role: 'user',      content: question },
       { role: 'assistant', content: text },
@@ -127,18 +160,56 @@ export class CompanionManager {
       this.history = this.history.slice(-MAX_HISTORY * 2)
     }
 
-    this.panelWindow.webContents.send(IPC.CLAUDE_DONE)
+    // Signal panel and overlay that streaming is complete
+    if (!this.panelWindow.isDestroyed())  this.panelWindow.webContents.send(IPC.CLAUDE_DONE)
+    if (!this.overlayWindow.isDestroyed()) this.overlayWindow.webContents.send(IPC.OVERLAY_RESPONSE_DONE)
 
-    // 4. Show overlay cursor on the correct display
-    if (point) this.showOverlayPoint(point, displayBounds)
-
-    // 5. TTS
+    // 4. TTS + await detection result in parallel
+    //    Detection started before streaming began, so it's usually ready by now.
     this.setState('responding')
-    await speak(text, proxy)
+    const [, detectedPoint] = await Promise.all([
+      speak(text, proxy),
+      detectionPromise,
+    ])
+
+    // 5. Show overlay cursor — prefer Computer Use result; fallback to POINT tag
+    const point = detectedPoint ?? fallbackPoint
+    if (point) this.showOverlayPoint(point, displayBounds)
 
     // 6. Done
     this.setState('idle')
     setTimeout(() => this.hideOverlay(), 8_000)
+  }
+
+  // ---------------------------------------------------------------------------
+  // Element location detection via Claude Computer Use API
+  // ---------------------------------------------------------------------------
+
+  private async detectElementLocation(
+    screenshotBase64Cu: string,
+    question:           string,
+    displayBounds:      Electron.Rectangle,
+    cuWidth:            number,
+    cuHeight:           number,
+  ): Promise<PointTarget | null> {
+    const proxy = getProxyUrl()
+    const res = await fetch(`${proxy}/detect`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        screenshotBase64: screenshotBase64Cu,
+        userQuestion:     question,
+        displayWidth:     displayBounds.width,
+        displayHeight:    displayBounds.height,
+        cuWidth,
+        cuHeight,
+      }),
+    })
+    if (!res.ok) return null
+    const data = await res.json() as { x: number | null; y: number | null }
+    if (data.x == null || data.y == null) return null
+    console.info(`[companion] Computer Use detected: (${data.x}, ${data.y})`)
+    return { x: data.x, y: data.y, label: '', screenIndex: 0 }
   }
 
   // ---------------------------------------------------------------------------
@@ -147,7 +218,6 @@ export class CompanionManager {
 
   private showOverlayPoint(point: PointTarget, displayBounds: Electron.Rectangle): void {
     if (this.overlayWindow.isDestroyed()) return
-    // Reposition overlay to the display that was captured
     this.overlayWindow.setBounds(displayBounds)
     this.overlayWindow.webContents.send(IPC.OVERLAY_POINT, point)
     this.overlayWindow.webContents.send(IPC.OVERLAY_TEXT, this.responseText)

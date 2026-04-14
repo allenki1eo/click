@@ -43,10 +43,15 @@ const api = {
   onWebSpeech:        (cb: (text: string) => void) => on(IPC.TTS_WEB_SPEECH, cb),
   notifyWebSpeechDone:(): void => ipcRenderer.send(IPC.TTS_WEB_SPEECH_DONE),
 
-  // Overlay
+  // Overlay — cursor pointing
   onOverlayPoint: (cb: (p: PointTarget) => void) => on(IPC.OVERLAY_POINT, cb),
   onOverlayText:  (cb: (t: string) => void) => on(IPC.OVERLAY_TEXT, cb),
   onOverlayHide:  (cb: () => void) => once(IPC.OVERLAY_HIDE, cb),
+
+  // Overlay — streaming response bubble near cursor (clicky-style)
+  onOverlayResponseStart: (cb: (pos: { x: number; y: number }) => void) => on<{ x: number; y: number }>(IPC.OVERLAY_RESPONSE_START, cb),
+  onOverlayResponseChunk: (cb: (chunk: string) => void) => on<string>(IPC.OVERLAY_RESPONSE_CHUNK, cb),
+  onOverlayResponseDone:  (cb: () => void) => once(IPC.OVERLAY_RESPONSE_DONE, cb),
 
   // Manual text query from the panel input field
   submitQuery: (text: string): Promise<void> => ipcRenderer.invoke(IPC.MANUAL_QUERY, text),

@@ -23,6 +23,8 @@ interface Env {
   ELEVENLABS_VOICE_ID: string
   // Transcription
   ASSEMBLYAI_API_KEY: string
+  // Computer Use element detection (optional — falls back to POINT tag parsing)
+  ANTHROPIC_API_KEY?: string
 }
 
 const CORS = {
@@ -43,9 +45,10 @@ export default {
     const { pathname } = new URL(request.url)
 
     try {
-      if (pathname === '/chat') return await handleChat(request, env)
-      if (pathname === '/tts') return await handleTts(request, env)
+      if (pathname === '/chat')      return await handleChat(request, env)
+      if (pathname === '/tts')       return await handleTts(request, env)
       if (pathname === '/transcribe') return await handleTranscribe(request, env)
+      if (pathname === '/detect')    return await handleDetect(request, env)
       return ok('Not found', { status: 404 })
     } catch (err) {
       console.error(`[${pathname}]`, err)
@@ -272,6 +275,120 @@ async function handleTranscribe(request: Request, env: Env): Promise<Response> {
 
   return ok(JSON.stringify({ error: 'Transcription timed out', text: '' }), {
     status: 500,
+    headers: { 'content-type': 'application/json' },
+  })
+}
+
+// ---------------------------------------------------------------------------
+// /detect — Claude Computer Use API for accurate UI element coordinates
+//
+// Client sends a screenshot pre-resized to the chosen Computer Use resolution.
+// We call the Anthropic Computer Use beta; Claude returns a click coordinate
+// in CU-resolution space which we scale back to display-local logical pixels.
+//
+// Falls back gracefully (returns {x:null,y:null}) when ANTHROPIC_API_KEY is
+// not configured so the client can fall back to POINT-tag parsing.
+// ---------------------------------------------------------------------------
+
+/** Anthropic-recommended Computer Use resolutions, mapped to aspect ratio. */
+const CU_RESOLUTIONS = [
+  { w: 1024, h: 768  },   // 4:3   – legacy
+  { w: 1280, h: 800  },   // 16:10 – most MacBooks
+  { w: 1366, h: 768  },   // ~16:9 – external monitors
+]
+
+function bestCuResolution(displayW: number, displayH: number): { w: number; h: number } {
+  const ratio = displayW / Math.max(1, displayH)
+  return CU_RESOLUTIONS.reduce((best, r) =>
+    Math.abs(r.w / r.h - ratio) < Math.abs(best.w / best.h - ratio) ? r : best
+  )
+}
+
+async function handleDetect(request: Request, env: Env): Promise<Response> {
+  // Graceful no-op when key not configured — client falls back to POINT tag
+  if (!env.ANTHROPIC_API_KEY) {
+    return ok(JSON.stringify({ x: null, y: null }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    })
+  }
+
+  const body = await request.json() as {
+    screenshotBase64: string   // already resized to cuWidth × cuHeight by client
+    userQuestion:     string
+    displayWidth:     number   // display logical px (for scaling CU coords back)
+    displayHeight:    number
+    cuWidth:          number   // dimensions the screenshot was resized to
+    cuHeight:         number
+  }
+
+  const { screenshotBase64, userQuestion, displayWidth, displayHeight, cuWidth, cuHeight } = body
+
+  const prompt =
+    `The user asked: "${userQuestion}"\n\n` +
+    `Look at the screenshot. If there is a specific UI element (button, link, menu item, ` +
+    `text field, icon, etc.) the user should interact with or is asking about, click on it. ` +
+    `If the question is purely conceptual and there is no specific element to point to, ` +
+    `respond with plain text saying "no element".`
+
+  const upstream = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'x-api-key':          env.ANTHROPIC_API_KEY,
+      'anthropic-version':  '2023-06-01',
+      'anthropic-beta':     'computer-use-2025-11-24',
+      'content-type':       'application/json',
+    },
+    body: JSON.stringify({
+      model:      'claude-sonnet-4-6',
+      max_tokens: 256,
+      tools: [{
+        type:               'computer_20251124',
+        name:               'computer',
+        display_width_px:   cuWidth,
+        display_height_px:  cuHeight,
+      }],
+      messages: [{
+        role: 'user',
+        content: [
+          { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: screenshotBase64 } },
+          { type: 'text', text: prompt },
+        ],
+      }],
+    }),
+  })
+
+  if (!upstream.ok) {
+    const err = await upstream.text()
+    console.error('[detect] Anthropic error', upstream.status, err.slice(0, 200))
+    return ok(JSON.stringify({ x: null, y: null }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    })
+  }
+
+  const data = await upstream.json() as { content?: Array<{ type: string; input?: { coordinate?: number[] } }> }
+
+  for (const block of data.content ?? []) {
+    if (block.type === 'tool_use' && Array.isArray(block.input?.coordinate) && block.input.coordinate.length === 2) {
+      const [cuX, cuY] = block.input.coordinate
+      // Clamp to declared resolution
+      const cx = Math.max(0, Math.min(cuX, cuWidth))
+      const cy = Math.max(0, Math.min(cuY, cuHeight))
+      // Scale from CU resolution → display logical pixels
+      const scaledX = Math.round((cx / cuWidth)  * displayWidth)
+      const scaledY = Math.round((cy / cuHeight) * displayHeight)
+      console.info(`[detect] CU (${cx},${cy}) in ${cuWidth}×${cuHeight} → (${scaledX},${scaledY}) in ${displayWidth}×${displayHeight}`)
+      return ok(JSON.stringify({ x: scaledX, y: scaledY }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      })
+    }
+  }
+
+  // Claude responded with text — no specific element found
+  return ok(JSON.stringify({ x: null, y: null }), {
+    status: 200,
     headers: { 'content-type': 'application/json' },
   })
 }
