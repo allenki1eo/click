@@ -19,16 +19,19 @@
 
 import { BrowserWindow, ipcMain } from 'electron'
 import { IPC } from '../shared/ipc'
-import type { CompanionState, CompanionStatus, Message, PointTarget } from '../shared/types'
+import type { CompanionState, CompanionStatus, HistoryEntry, Message, PointTarget } from '../shared/types'
 import { captureScreen } from './screenshot'
 import { getActiveAppContext, formatAppContext } from './appContext'
 import { streamGuidance } from '../services/claude'
 import { speak, setTtsWindow } from '../services/tts'
 import { getProxyUrl, getOrbConfig } from './config'
+import { loadHistory, appendHistory } from './history'
 
 const MAX_HISTORY = 10
 /** Delay between multi-step overlay targets (ms) */
 const STEP_DWELL_MS = 3500
+
+function uid(): string { return Math.random().toString(36).slice(2, 10) }
 
 export class CompanionManager {
   private state: CompanionState = 'idle'
@@ -43,6 +46,16 @@ export class CompanionManager {
   ) {
     setTtsWindow(panelWindow)
     this.registerIpc()
+
+    // Restore AI context from persisted history so multi-turn conversation
+    // continues seamlessly after app restarts.
+    const saved = loadHistory()
+    if (saved.length) {
+      this.history = saved
+        .slice(-MAX_HISTORY * 2)
+        .map((e) => ({ role: e.role, content: e.content }))
+      console.info(`[companion] Loaded ${saved.length} history entries (${this.history.length} in context)`)
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -87,7 +100,7 @@ export class CompanionManager {
   }
 
   reset(): void {
-    this.history = []
+    this.history = []   // clear in-memory AI context (disk cleared by CLEAR_HISTORY IPC)
     this.responseText = ''
     this.transcript = ''
     this.error = ''
@@ -177,6 +190,13 @@ export class CompanionManager {
     if (this.history.length > MAX_HISTORY * 2) {
       this.history = this.history.slice(-MAX_HISTORY * 2)
     }
+
+    // Persist this turn to disk — survives app restarts
+    const now = Date.now()
+    appendHistory([
+      { id: uid(), role: 'user',      content: question, ts: now },
+      { id: uid(), role: 'assistant', content: text,     ts: now + 1 },
+    ])
 
     // Signal panel and overlay that streaming is complete
     if (!this.panelWindow.isDestroyed())   this.panelWindow.webContents.send(IPC.CLAUDE_DONE)

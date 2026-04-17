@@ -19,6 +19,7 @@ import { TrayManager } from './tray'
 import { createOverlayWindow, resizeOverlayToScreen } from './overlay'
 import { IPC } from '../shared/ipc'
 import { getOrbConfig, setOrbConfig, getProxyUrl, setProxyUrl } from './config'
+import { loadHistory, clearHistory } from './history'
 import type { OrbConfig } from '../shared/types'
 
 const PRELOAD = join(__dirname, '../preload/index.js')
@@ -197,6 +198,13 @@ app.whenReady().then(() => {
   // Proxy URL IPC
   ipcMain.handle(IPC.GET_PROXY_URL, () => getProxyUrl())
   ipcMain.handle(IPC.SET_PROXY_URL, (_, url: string) => setProxyUrl(url))
+
+  // Persistent history IPC
+  ipcMain.handle(IPC.GET_HISTORY, () => loadHistory())
+  ipcMain.handle(IPC.CLEAR_HISTORY, () => {
+    clearHistory()
+    companion.reset()  // also clears in-memory AI context
+  })
 
   // Voice transcription — receive base64 audio from renderer, forward to proxy
   ipcMain.handle(IPC.TRANSCRIBE_AUDIO, async (_, b64: string): Promise<string> => {

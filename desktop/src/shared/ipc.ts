@@ -55,6 +55,10 @@ export const IPC = {
   GET_PROXY_URL:  'proxy:get-url',
   SET_PROXY_URL:  'proxy:set-url',
 
-  // Voice transcription (renderer → main → proxy AssemblyAI)
+  // Voice transcription (renderer → main → proxy Groq/AssemblyAI)
   TRANSCRIBE_AUDIO: 'transcribe:audio',
+
+  // Persistent conversation history (renderer ↔ main)
+  GET_HISTORY:   'history:get',    // renderer invoke → returns HistoryEntry[]
+  CLEAR_HISTORY: 'history:clear',  // renderer invoke → clears file + in-memory context
 } as const

@@ -5,7 +5,7 @@
 
 import { contextBridge, ipcRenderer } from 'electron'
 import { IPC } from '../shared/ipc'
-import type { CompanionStatus, OrbConfig, PointTarget } from '../shared/types'
+import type { CompanionStatus, HistoryEntry, OrbConfig, PointTarget } from '../shared/types'
 
 function on<T>(ch: string, cb: (v: T) => void): () => void {
   const h = (_: Electron.IpcRendererEvent, v: T): void => cb(v)
@@ -71,6 +71,10 @@ const api = {
 
   // Voice transcription — renderer sends base64 audio; main calls proxy /transcribe
   transcribeAudio: (b64: string): Promise<string> => ipcRenderer.invoke(IPC.TRANSCRIBE_AUDIO, b64),
+
+  // Persistent history
+  getHistory:   (): Promise<HistoryEntry[]> => ipcRenderer.invoke(IPC.GET_HISTORY),
+  clearHistory: (): Promise<void>           => ipcRenderer.invoke(IPC.CLEAR_HISTORY),
 }
 
 contextBridge.exposeInMainWorld('api', api)

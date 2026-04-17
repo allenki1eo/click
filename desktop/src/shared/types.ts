@@ -12,6 +12,8 @@ export interface OrbConfig {
   name: string
   theme: string   // hex colour, e.g. "#10b981"
   personality: 'friendly' | 'professional' | 'playful' | 'concise'
+  /** Enable always-listening wake-word mode ("Hey Mwongozo") */
+  wakeWord: boolean
 }
 
 /** Parsed [POINT:x,y:label:screenN] or [STEP:n:x,y:label:screenN] tag from Claude response */
@@ -34,4 +36,14 @@ export interface CompanionStatus {
   /** Final transcript from AssemblyAI */
   transcript: string
   error: string
+}
+
+/** One message in the persisted conversation history */
+export interface HistoryEntry {
+  /** Stable ID for React keys */
+  id: string
+  role: 'user' | 'assistant'
+  content: string
+  /** Unix ms timestamp */
+  ts: number
 }
