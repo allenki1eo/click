@@ -7,6 +7,7 @@ import type { OrbConfig } from '../shared/types'
 
 interface Schema {
   proxyUrl: string
+  orgId: string
   orbName: string
   orbTheme: string
   orbPersonality: OrbConfig['personality']
@@ -18,6 +19,7 @@ const store = new Store<Schema>({
   encryptionKey: 'mwongozo-v1',
   defaults: {
     proxyUrl: 'http://localhost:8787',
+    orgId: '',
     orbName: 'Mwongozo',
     orbTheme: '#10b981',
     orbPersonality: 'friendly',
@@ -31,6 +33,14 @@ export function getProxyUrl(): string {
 
 export function setProxyUrl(url: string): void {
   store.set('proxyUrl', url)
+}
+
+export function getOrgId(): string {
+  return store.get('orgId')
+}
+
+export function setOrgId(id: string): void {
+  store.set('orgId', id)
 }
 
 export function getOrbConfig(): OrbConfig {

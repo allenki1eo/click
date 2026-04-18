@@ -69,6 +69,10 @@ const api = {
   getProxyUrl: (): Promise<string> => ipcRenderer.invoke(IPC.GET_PROXY_URL),
   setProxyUrl: (url: string): Promise<void> => ipcRenderer.invoke(IPC.SET_PROXY_URL, url),
 
+  // Org ID (white-labeling)
+  getOrgId: (): Promise<string> => ipcRenderer.invoke(IPC.GET_ORG_ID),
+  setOrgId: (id: string): Promise<void> => ipcRenderer.invoke(IPC.SET_ORG_ID, id),
+
   // Voice transcription — renderer sends base64 audio; main calls proxy /transcribe
   transcribeAudio: (b64: string): Promise<string> => ipcRenderer.invoke(IPC.TRANSCRIBE_AUDIO, b64),
 

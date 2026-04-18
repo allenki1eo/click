@@ -1,0 +1,56 @@
+version: '3.8'
+
+# Mwongozo — on-premise enterprise deployment
+#
+# Usage:
+#   1. Copy .env.example to proxy/.env and fill in your API keys
+#   2. docker compose up -d
+#   3. Open http://localhost/admin for the dashboard
+#      Widget JS: http://localhost/widget.js
+#
+# For TRA:   data-proxy="http://your-server" data-org="tra"
+# For BRELA: data-proxy="http://your-server" data-org="brela"
+# etc.
+
+services:
+
+  proxy:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: mwongozo-proxy
+    restart: unless-stopped
+    env_file:
+      - proxy/.env
+    environment:
+      PORT: 8787
+    volumes:
+      # Persist org configs and RAG data outside the container
+      - ./proxy/orgs:/app/orgs:ro
+      - mwongozo-data:/app/data
+    ports:
+      - "8787:8787"    # expose directly for dev; nginx proxies in prod
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8787/config?org=tra"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: mwongozo-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./sdk/dist:/usr/share/nginx/html/widget:ro
+      - ./dashboard:/usr/share/nginx/html/admin:ro
+    depends_on:
+      proxy:
+        condition: service_healthy
+
+volumes:
+  mwongozo-data:
+    name: mwongozo-data

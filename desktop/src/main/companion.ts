@@ -28,7 +28,7 @@ import { getActiveAppContext, formatAppContext } from './appContext'
 import type { AppContext } from './appContext'
 import { streamGuidance } from '../services/claude'
 import { speak, setTtsWindow } from '../services/tts'
-import { getProxyUrl, getOrbConfig } from './config'
+import { getProxyUrl, getOrbConfig, getOrgId } from './config'
 
 const MAX_HISTORY = 10
 /** Delay between multi-step overlay targets (ms) */
@@ -230,11 +230,13 @@ export class CompanionManager {
     const { personality } = getOrbConfig()
     let firstChunk = true
 
+    const orgId = getOrgId()
     const { text, point: fallbackPoint, steps: glmSteps } = await streamGuidance({
       screenshotBase64: screenshot,
       transcript:       question,
       history:          this.history,
       proxyUrl:         proxy,
+      orgId:            orgId || undefined,
       screenWidth,      screenHeight,
       personality,
       appContext,                            // Feature 1: active app context

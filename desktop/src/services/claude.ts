@@ -89,6 +89,7 @@ export async function streamGuidance(opts: {
   transcript: string
   history: Message[]
   proxyUrl: string
+  orgId?: string
   screenWidth: number
   screenHeight: number
   personality?: string
@@ -96,7 +97,7 @@ export async function streamGuidance(opts: {
   onChunk: (text: string) => void
 }): Promise<{ text: string; point: PointTarget | null; steps: PointTarget[] }> {
   const {
-    screenshotBase64, transcript, history, proxyUrl,
+    screenshotBase64, transcript, history, proxyUrl, orgId,
     screenWidth, screenHeight, personality, appContext, onChunk,
   } = opts
 
@@ -160,7 +161,10 @@ export async function streamGuidance(opts: {
 
   const response = await (net.fetch as typeof fetch)(`${proxyUrl}/chat`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      ...(orgId ? { 'X-Org-Id': orgId } : {}),
+    },
     body: JSON.stringify({ model, max_tokens: 1200, stream: true, messages }),
   })
 
