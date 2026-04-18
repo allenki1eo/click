@@ -648,6 +648,7 @@ export function App(): React.ReactElement {
   const transcribingRef   = useRef(false)   // mirrors `transcribing` for stale-closure safety
   const wakeRecognitionRef = useRef<SpeechRecognition | null>(null)
   const wakeActiveRef      = useRef(false)   // true while wake-word listener is running
+  const wakeCapturingRef   = useRef(false)   // true during stage-2 query capture
   const orbCfgRef          = useRef(orbCfg)  // always-current config inside callbacks
   const statusRef          = useRef(status)
 
@@ -717,54 +718,143 @@ export function App(): React.ReactElement {
     return () => stopWakeWord()
   }, [orbCfg.wakeWordEnabled])
 
+  // ── Wake word — two-stage detection ────────────────────────────────────────
+  //
+  // Stage 1: continuous listener watches for "Hey [name]" in any result.
+  // Stage 2: when the phrase is detected, stop Stage 1, show "Now ask your
+  //          question" UI, start a short one-shot listener for the follow-up.
+  //          If the query was already in the same utterance (e.g. "Hey Agentic1
+  //          what is the VAT rate"), submit immediately without Stage 2.
+
+  function _getSpeechAPI(): { new(): SpeechRecognition } | null {
+    const API = (window.webkitSpeechRecognition as unknown as { new(): SpeechRecognition } | undefined)
+      ?? (typeof SpeechRecognition !== 'undefined' ? SpeechRecognition : undefined)
+    return API ?? null
+  }
+
+  function _submitWakeQuery(text: string): void {
+    if (!text.trim()) return
+    wakeCapturingRef.current = false
+    setLiveTranscript('')
+    setMessages((prev) => [...prev, { id: uid(), role: 'user', content: text }])
+    streamingRef.current = ''
+    setStreaming('')
+    window.api.submitQuery(text)
+  }
+
+  // Stage 2: capture the follow-up question after the wake phrase
+  function _startQueryCapture(): void {
+    const API = _getSpeechAPI()
+    if (!API) return
+
+    wakeCapturingRef.current = true
+    setLiveTranscript('Listening… ask your question')
+    console.info('[wake-word] stage-2: capturing follow-up question')
+
+    const rec = new API()
+    rec.continuous     = false
+    rec.interimResults = true
+    rec.lang           = 'en-US'
+
+    let submitted = false
+
+    rec.onresult = (event: SpeechRecognitionEvent): void => {
+      for (let i = 0; i < event.results.length; i++) {
+        const transcript = event.results[i][0].transcript.trim()
+        if (event.results[i].isFinal && transcript && !submitted) {
+          submitted = true
+          _submitWakeQuery(transcript)
+        } else if (!event.results[i].isFinal) {
+          // Show live preview of what the user is saying
+          setLiveTranscript(transcript || 'Listening…')
+        }
+      }
+    }
+
+    rec.onerror = (e: SpeechRecognitionErrorEvent): void => {
+      if (e.error !== 'no-speech') console.warn('[wake-word stage-2] error:', e.error)
+    }
+
+    rec.onend = (): void => {
+      wakeCapturingRef.current = false
+      setLiveTranscript('')
+      // Restart stage-1 listener regardless of whether we got a result
+      setTimeout(() => {
+        if (orbCfgRef.current.wakeWordEnabled && wakeActiveRef.current) {
+          wakeActiveRef.current = false  // allow re-entry
+          startWakeWord()
+        }
+      }, 200)
+    }
+
+    try { rec.start() } catch (e) {
+      console.warn('[wake-word stage-2] Could not start:', e)
+      wakeCapturingRef.current = false
+      setLiveTranscript('')
+    }
+  }
+
+  // Stage 1: always-on listener waiting for the wake phrase
   function startWakeWord(): void {
     if (wakeActiveRef.current) return
-    const SpeechRecognitionAPI = window.webkitSpeechRecognition ?? SpeechRecognition
-    if (!SpeechRecognitionAPI) {
-      console.warn('[wake-word] Web Speech API not available in this environment')
+    const API = _getSpeechAPI()
+    if (!API) {
+      console.warn('[wake-word] Web Speech API not available')
       return
     }
 
-    const recognition = new SpeechRecognitionAPI()
+    const recognition = new API()
     recognition.continuous     = true
     recognition.interimResults = true
     recognition.lang           = 'en-US'
 
     recognition.onresult = (event: SpeechRecognitionEvent): void => {
-      // Only act when not already busy
       if (statusRef.current.state !== 'idle' || transcribingRef.current) return
+      if (wakeCapturingRef.current) return  // stage-2 is already running
 
       for (let i = event.resultIndex; i < event.results.length; i++) {
-        const t       = event.results[i][0].transcript.trim().toLowerCase()
-        const name    = orbCfgRef.current.name.toLowerCase()
-        const isFinal = event.results[i].isFinal
+        const t    = event.results[i][0].transcript.trim().toLowerCase()
+        const name = orbCfgRef.current.name.toLowerCase()
 
-        // Match "hey mwongozo" or "hey <custom-name>" in either interim or final
-        const wakeIdx = t.indexOf(`hey ${name}`)
+        // Accept "hey <name>" with optional punctuation / partial match
+        const wakePhrase = `hey ${name}`
+        const wakeIdx    = t.indexOf(wakePhrase)
         if (wakeIdx < 0) continue
 
-        // On final result: extract the query following the wake phrase
-        if (isFinal) {
-          const after = t.slice(wakeIdx + `hey ${name}`.length).trim()
-          if (after) {
-            setMessages((prev) => [...prev, { id: uid(), role: 'user', content: after }])
-            streamingRef.current = ''
-            setStreaming('')
-            window.api.submitQuery(after)
-          }
+        console.info(`[wake-word] detected: "${t}"`)
+
+        // Grab any text that followed the wake phrase in the same utterance
+        const after = t.slice(wakeIdx + wakePhrase.length).trim()
+
+        // If there's already a full query in the same breath, submit now
+        if (after && event.results[i].isFinal) {
+          recognition.abort()
+          wakeActiveRef.current = false
+          _submitWakeQuery(after)
+          // Restart stage-1 after a short pause
+          setTimeout(() => {
+            if (orbCfgRef.current.wakeWordEnabled) {
+              startWakeWord()
+            }
+          }, 1000)
+          return
         }
-        break
+
+        // Otherwise: stop stage-1 and enter stage-2 to capture follow-up
+        recognition.abort()
+        wakeActiveRef.current = false
+        _startQueryCapture()
+        return
       }
     }
 
     recognition.onerror = (e: SpeechRecognitionErrorEvent): void => {
-      // "no-speech" fires often in silence — just restart silently
       if (e.error !== 'no-speech') console.warn('[wake-word] error:', e.error)
     }
 
     recognition.onend = (): void => {
-      // Restart automatically while still enabled
-      if (orbCfgRef.current.wakeWordEnabled && wakeActiveRef.current) {
+      // Auto-restart stage-1 unless stage-2 took over or we were stopped
+      if (orbCfgRef.current.wakeWordEnabled && wakeActiveRef.current && !wakeCapturingRef.current) {
         try { recognition.start() } catch { /* already starting */ }
       }
     }
@@ -773,17 +863,18 @@ export function App(): React.ReactElement {
       recognition.start()
       wakeRecognitionRef.current = recognition
       wakeActiveRef.current      = true
-      console.info('[wake-word] listening for "Hey ' + orbCfgRef.current.name + '"')
+      console.info('[wake-word] stage-1: listening for "Hey ' + orbCfgRef.current.name + '"')
     } catch (e) {
-      console.warn('[wake-word] Could not start recognition:', e)
+      console.warn('[wake-word] Could not start:', e)
     }
   }
 
   function stopWakeWord(): void {
-    if (!wakeActiveRef.current) return
-    wakeActiveRef.current = false
-    try { wakeRecognitionRef.current?.stop() } catch { /* ignore */ }
+    wakeActiveRef.current    = false
+    wakeCapturingRef.current = false
+    try { wakeRecognitionRef.current?.abort() } catch { /* ignore */ }
     wakeRecognitionRef.current = null
+    setLiveTranscript('')
     console.info('[wake-word] stopped')
   }
 
