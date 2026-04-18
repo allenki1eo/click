@@ -234,23 +234,22 @@ function PttButton({
 
 function ChatTab({
   messages, streaming, liveTranscript, transcribing, status, listening, textInput, theme, orbName,
-  wakeWordEnabled, setTextInput, onPress, onRelease, onTextSubmit, onClear,
+  setTextInput, onPress, onRelease, onTextSubmit, onClear,
 }: {
-  messages:        UIMessage[]
-  streaming:       string
-  liveTranscript:  string
-  transcribing:    boolean
-  status:          CompanionStatus
-  listening:       boolean
-  textInput:       string
-  theme:           string
-  orbName:         string
-  wakeWordEnabled: boolean
-  setTextInput:    (v: string) => void
-  onPress:         () => void
-  onRelease:       () => void
-  onTextSubmit:    (e: React.FormEvent) => void
-  onClear:         () => void
+  messages:       UIMessage[]
+  streaming:      string
+  liveTranscript: string
+  transcribing:   boolean
+  status:         CompanionStatus
+  listening:      boolean
+  textInput:      string
+  theme:          string
+  orbName:        string
+  setTextInput:   (v: string) => void
+  onPress:        () => void
+  onRelease:      () => void
+  onTextSubmit:   (e: React.FormEvent) => void
+  onClear:        () => void
 }): React.ReactElement {
   const bottomRef = useRef<HTMLDivElement>(null)
   const { state, error } = status
@@ -269,11 +268,7 @@ function ChatTab({
         {messages.length === 0 && !streaming && !error && (
           <div className="flex flex-col items-center justify-center h-full text-gray-500 text-sm space-y-2 pb-4">
             <p className="text-3xl">🎙️</p>
-            {wakeWordEnabled ? (
-              <p>Say <span className="font-mono text-xs px-1.5 py-0.5 rounded bg-gray-700">Hey {orbName}</span> to activate</p>
-            ) : (
-              <p>Hold <kbd className="px-1.5 py-0.5 rounded bg-gray-700 text-xs font-mono">Ctrl+Shift+Space</kbd> and speak</p>
-            )}
+            <p>Hold <kbd className="px-1.5 py-0.5 rounded bg-gray-700 text-xs font-mono">Ctrl+Shift+Space</kbd> and speak</p>
             <p className="text-xs opacity-60">or type below — {orbName} is ready</p>
           </div>
         )}
@@ -587,37 +582,6 @@ function SettingsTab({
         </p>
       </section>
 
-      {/* Wake word */}
-      <section>
-        <div className="flex items-center justify-between">
-          <div>
-            <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider">
-              Wake word
-            </p>
-            <p className="text-xs text-gray-600 mt-0.5">
-              Say &ldquo;Hey {config.name}&rdquo; to activate
-            </p>
-          </div>
-          <button
-            role="switch"
-            aria-checked={config.wakeWordEnabled}
-            onClick={() => onSaveConfig({ wakeWordEnabled: !config.wakeWordEnabled })}
-            className="relative flex-shrink-0 w-10 h-6 rounded-full transition-colors duration-200 focus:outline-none"
-            style={{ backgroundColor: config.wakeWordEnabled ? config.theme : '#374151' }}
-          >
-            <span
-              className="absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full shadow transition-transform duration-200"
-              style={{ transform: config.wakeWordEnabled ? 'translateX(16px)' : 'translateX(0)' }}
-            />
-          </button>
-        </div>
-        {config.wakeWordEnabled && (
-          <p className="text-xs mt-2 px-3 py-2 rounded-lg bg-[#161b22] border border-white/10"
-             style={{ color: config.theme }}>
-            Listening… speak &ldquo;Hey {config.name}, [your question]&rdquo;
-          </p>
-        )}
-      </section>
     </div>
   )
 }
@@ -646,9 +610,6 @@ export function App(): React.ReactElement {
   const mediaRecorderRef  = useRef<MediaRecorder | null>(null)
   const audioChunksRef    = useRef<Blob[]>([])
   const transcribingRef   = useRef(false)   // mirrors `transcribing` for stale-closure safety
-  const wakeRecognitionRef = useRef<SpeechRecognition | null>(null)
-  const wakeActiveRef      = useRef(false)   // true while wake-word listener is running
-  const wakeCapturingRef   = useRef(false)   // true during stage-2 query capture
   const orbCfgRef          = useRef(orbCfg)  // always-current config inside callbacks
   const statusRef          = useRef(status)
 
@@ -706,177 +667,6 @@ export function App(): React.ReactElement {
   // Keep always-current refs in sync for use inside callbacks
   useEffect(() => { orbCfgRef.current = orbCfg }, [orbCfg])
   useEffect(() => { statusRef.current = status  }, [status])
-
-  // ── Wake word detection ────────────────────────────────────────────────────
-
-  useEffect(() => {
-    if (orbCfg.wakeWordEnabled) {
-      startWakeWord()
-    } else {
-      stopWakeWord()
-    }
-    return () => stopWakeWord()
-  }, [orbCfg.wakeWordEnabled])
-
-  // ── Wake word — two-stage detection ────────────────────────────────────────
-  //
-  // Stage 1: continuous listener watches for "Hey [name]" in any result.
-  // Stage 2: when the phrase is detected, stop Stage 1, show "Now ask your
-  //          question" UI, start a short one-shot listener for the follow-up.
-  //          If the query was already in the same utterance (e.g. "Hey Agentic1
-  //          what is the VAT rate"), submit immediately without Stage 2.
-
-  function _getSpeechAPI(): { new(): SpeechRecognition } | null {
-    const API = (window.webkitSpeechRecognition as unknown as { new(): SpeechRecognition } | undefined)
-      ?? (typeof SpeechRecognition !== 'undefined' ? SpeechRecognition : undefined)
-    return API ?? null
-  }
-
-  function _submitWakeQuery(text: string): void {
-    if (!text.trim()) return
-    wakeCapturingRef.current = false
-    setLiveTranscript('')
-    setMessages((prev) => [...prev, { id: uid(), role: 'user', content: text }])
-    streamingRef.current = ''
-    setStreaming('')
-    window.api.submitQuery(text)
-  }
-
-  // Stage 2: capture the follow-up question after the wake phrase
-  function _startQueryCapture(): void {
-    const API = _getSpeechAPI()
-    if (!API) return
-
-    wakeCapturingRef.current = true
-    setLiveTranscript('Listening… ask your question')
-    console.info('[wake-word] stage-2: capturing follow-up question')
-
-    const rec = new API()
-    rec.continuous     = false
-    rec.interimResults = true
-    rec.lang           = 'en-US'
-
-    let submitted = false
-
-    rec.onresult = (event: SpeechRecognitionEvent): void => {
-      for (let i = 0; i < event.results.length; i++) {
-        const transcript = event.results[i][0].transcript.trim()
-        if (event.results[i].isFinal && transcript && !submitted) {
-          submitted = true
-          _submitWakeQuery(transcript)
-        } else if (!event.results[i].isFinal) {
-          // Show live preview of what the user is saying
-          setLiveTranscript(transcript || 'Listening…')
-        }
-      }
-    }
-
-    rec.onerror = (e: SpeechRecognitionErrorEvent): void => {
-      if (e.error !== 'no-speech') console.warn('[wake-word stage-2] error:', e.error)
-    }
-
-    rec.onend = (): void => {
-      wakeCapturingRef.current = false
-      setLiveTranscript('')
-      // Restart stage-1 listener regardless of whether we got a result
-      setTimeout(() => {
-        if (orbCfgRef.current.wakeWordEnabled && wakeActiveRef.current) {
-          wakeActiveRef.current = false  // allow re-entry
-          startWakeWord()
-        }
-      }, 200)
-    }
-
-    try { rec.start() } catch (e) {
-      console.warn('[wake-word stage-2] Could not start:', e)
-      wakeCapturingRef.current = false
-      setLiveTranscript('')
-    }
-  }
-
-  // Stage 1: always-on listener waiting for the wake phrase
-  function startWakeWord(): void {
-    if (wakeActiveRef.current) return
-    const API = _getSpeechAPI()
-    if (!API) {
-      console.warn('[wake-word] Web Speech API not available')
-      return
-    }
-
-    const recognition = new API()
-    recognition.continuous     = true
-    recognition.interimResults = true
-    recognition.lang           = 'en-US'
-
-    recognition.onresult = (event: SpeechRecognitionEvent): void => {
-      if (statusRef.current.state !== 'idle' || transcribingRef.current) return
-      if (wakeCapturingRef.current) return  // stage-2 is already running
-
-      for (let i = event.resultIndex; i < event.results.length; i++) {
-        const t    = event.results[i][0].transcript.trim().toLowerCase()
-        const name = orbCfgRef.current.name.toLowerCase()
-
-        // Accept "hey <name>" with optional punctuation / partial match
-        const wakePhrase = `hey ${name}`
-        const wakeIdx    = t.indexOf(wakePhrase)
-        if (wakeIdx < 0) continue
-
-        console.info(`[wake-word] detected: "${t}"`)
-
-        // Grab any text that followed the wake phrase in the same utterance
-        const after = t.slice(wakeIdx + wakePhrase.length).trim()
-
-        // If there's already a full query in the same breath, submit now
-        if (after && event.results[i].isFinal) {
-          recognition.abort()
-          wakeActiveRef.current = false
-          _submitWakeQuery(after)
-          // Restart stage-1 after a short pause
-          setTimeout(() => {
-            if (orbCfgRef.current.wakeWordEnabled) {
-              startWakeWord()
-            }
-          }, 1000)
-          return
-        }
-
-        // Otherwise: stop stage-1 and enter stage-2 to capture follow-up
-        recognition.abort()
-        wakeActiveRef.current = false
-        _startQueryCapture()
-        return
-      }
-    }
-
-    recognition.onerror = (e: SpeechRecognitionErrorEvent): void => {
-      if (e.error !== 'no-speech') console.warn('[wake-word] error:', e.error)
-    }
-
-    recognition.onend = (): void => {
-      // Auto-restart stage-1 unless stage-2 took over or we were stopped
-      if (orbCfgRef.current.wakeWordEnabled && wakeActiveRef.current && !wakeCapturingRef.current) {
-        try { recognition.start() } catch { /* already starting */ }
-      }
-    }
-
-    try {
-      recognition.start()
-      wakeRecognitionRef.current = recognition
-      wakeActiveRef.current      = true
-      console.info('[wake-word] stage-1: listening for "Hey ' + orbCfgRef.current.name + '"')
-    } catch (e) {
-      console.warn('[wake-word] Could not start:', e)
-    }
-  }
-
-  function stopWakeWord(): void {
-    wakeActiveRef.current    = false
-    wakeCapturingRef.current = false
-    try { wakeRecognitionRef.current?.abort() } catch { /* ignore */ }
-    wakeRecognitionRef.current = null
-    setLiveTranscript('')
-    console.info('[wake-word] stopped')
-  }
 
   // ── MediaRecorder-based voice input ───────────────────────────────────────
 
@@ -1078,7 +868,6 @@ export function App(): React.ReactElement {
           textInput={textInput}
           theme={theme}
           orbName={orbName}
-          wakeWordEnabled={orbCfg.wakeWordEnabled}
           setTextInput={setTextInput}
           onPress={handlePress}
           onRelease={handleRelease}
