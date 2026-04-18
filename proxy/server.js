@@ -11,6 +11,7 @@ const https = require('https');
 const url = require('url');
 const fs = require('fs');
 const path = require('path');
+const analytics = require('./analytics');
 
 // Load .env
 try {
@@ -156,6 +157,22 @@ const server = http.createServer(async (req, res) => {
       }
       if (pathname === '/transcribe') {
         await handleTranscribe(bodyBuffer, res);
+        return;
+      }
+      if (pathname === '/log') {
+        await handleLog(body, res, org);
+        return;
+      }
+      if (pathname === '/admin/analytics') {
+        await handleAdminAnalytics(req, res, org);
+        return;
+      }
+      if (pathname === '/admin/conversations') {
+        await handleAdminConversations(req, res, org);
+        return;
+      }
+      if (pathname === '/admin/knowledge') {
+        await handleAdminKnowledge(req, res, body, org);
         return;
       }
       res.writeHead(404, { 'Content-Type': 'application/json' });
@@ -390,6 +407,91 @@ async function handleTranscribe(audioBuffer, res) {
 }
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+// POST /log — widget fires this on every user/assistant message
+async function handleLog(body, res, org) {
+  try {
+    const { role, text, page, lang, sessionId } = JSON.parse(body);
+    if (org?.id && role && text) {
+      analytics.logMessage(org.id, sessionId || 'anon', role, text, { page, lang });
+    }
+    res.writeHead(204); res.end();
+  } catch (_) {
+    res.writeHead(400); res.end();
+  }
+}
+
+// GET /admin/analytics?org=tra — summary stats for the dashboard
+async function handleAdminAnalytics(req, res, org) {
+  if (!requireAdmin(req, res)) return;
+  const qOrg = url.parse(req.url, true).query.org || org?.id;
+  if (!qOrg) { res.writeHead(400, json); res.end(JSON.stringify({ error: 'org required' })); return; }
+  const summary = analytics.getSummary(qOrg);
+  res.writeHead(200, json);
+  res.end(JSON.stringify(summary));
+}
+
+// GET /admin/conversations?org=tra&limit=50
+async function handleAdminConversations(req, res, org) {
+  if (!requireAdmin(req, res)) return;
+  const q = url.parse(req.url, true).query;
+  const qOrg = q.org || org?.id;
+  const limit = parseInt(q.limit) || 50;
+  if (!qOrg) { res.writeHead(400, json); res.end(JSON.stringify({ error: 'org required' })); return; }
+  const convos = analytics.getRecentConversations(qOrg, limit);
+  res.writeHead(200, json);
+  res.end(JSON.stringify(convos));
+}
+
+// GET/POST /admin/knowledge?org=tra — read or update org knowledge base
+async function handleAdminKnowledge(req, res, body, org) {
+  if (!requireAdmin(req, res)) return;
+  const qOrg = url.parse(req.url, true).query.org || org?.id;
+  if (!qOrg) { res.writeHead(400, json); res.end(JSON.stringify({ error: 'org required' })); return; }
+
+  const safe = qOrg.replace(/[^a-z0-9_-]/gi, '');
+  const filePath = path.join(ORGS_DIR, `${safe}.json`);
+
+  if (req.method === 'GET') {
+    try {
+      const cfg = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+      res.writeHead(200, json);
+      res.end(JSON.stringify({ systemPrompt: cfg.systemPrompt, welcomeMessage: cfg.welcomeMessage }));
+    } catch (_) {
+      res.writeHead(404, json); res.end(JSON.stringify({ error: 'Not found' }));
+    }
+    return;
+  }
+
+  // POST — update knowledge
+  try {
+    const { systemPrompt, welcomeMessage } = JSON.parse(body);
+    const cfg = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    if (systemPrompt)    cfg.systemPrompt    = systemPrompt;
+    if (welcomeMessage)  cfg.welcomeMessage  = welcomeMessage;
+    fs.writeFileSync(filePath, JSON.stringify(cfg, null, 2));
+    // Clear org from cache so it reloads
+    orgCache.delete(safe);
+    res.writeHead(200, json);
+    res.end(JSON.stringify({ ok: true }));
+  } catch (e) {
+    res.writeHead(500, json); res.end(JSON.stringify({ error: e.message }));
+  }
+}
+
+const json = { 'Content-Type': 'application/json' };
+
+function requireAdmin(req, res) {
+  const secret = process.env.ADMIN_SECRET;
+  if (!secret) return true; // no secret set → open (dev mode)
+  const provided = req.headers['x-admin-secret'] || url.parse(req.url, true).query.secret;
+  if (provided !== secret) {
+    res.writeHead(401, json);
+    res.end(JSON.stringify({ error: 'Unauthorized' }));
+    return false;
+  }
+  return true;
+}
 
 server.listen(PORT, () => {
   console.log(`\nMwongozo proxy — http://localhost:${PORT}`);

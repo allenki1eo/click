@@ -1,25 +1,29 @@
 /**
  * MwongozoWidget — main orchestrator.
- * Wires together: Orb, Panel, ChatService, AudioService, DOMHighlighter, PageContext.
+ * Wires together Orb, Panel, ChatService, AudioService, DOMHighlighter, PageContext.
  */
 
-import { OrbComponent }    from './orb.js';
-import { PanelComponent }  from './panel.js';
-import { ChatService }     from './chat.js';
-import { AudioService }    from './audio.js';
-import { DOMHighlighter }  from './highlighter.js';
-import { getPageContext }  from './context.js';
+import { OrbComponent }   from './orb.js';
+import { PanelComponent } from './panel.js';
+import { ChatService }    from './chat.js';
+import { AudioService }   from './audio.js';
+import { DOMHighlighter } from './highlighter.js';
+import { getPageContext } from './context.js';
+import { detectLang, t } from './i18n.js';
 
 export class MwongozoWidget {
   constructor(config) {
-    this.orgId    = config.orgId || 'default';
+    this.orgId    = config.orgId    || 'default';
     this.proxyUrl = config.proxyUrl || 'http://localhost:8787';
     this.orgConfig = config.orgConfig || {};
 
-    const theme   = this.orgConfig.theme || config.theme || '#00843D';
-    const name    = this.orgConfig.name  || config.name  || 'Msaada';
+    const theme = this.orgConfig.theme || config.theme || '#00843D';
+    const name  = this.orgConfig.name  || config.name  || 'Msaada';
+    const lang  = detectLang(this.orgConfig.language);
 
-    this._orb  = new OrbComponent({
+    this._lang = lang;
+
+    this._orb = new OrbComponent({
       theme,
       name,
       position: config.position || 'bottom-right',
@@ -27,13 +31,13 @@ export class MwongozoWidget {
     this._panel = new PanelComponent({
       theme,
       name,
-      welcomeMessage:     this.orgConfig.welcomeMessage,
-      suggestedQuestions: this.orgConfig.suggestedQuestions || [],
-      language:           this.orgConfig.language || 'sw-en',
+      welcomeMessage:      this.orgConfig.welcomeMessage,
+      suggestedQuestions:  this.orgConfig.suggestedQuestions || [],
+      language:            lang,
     });
-    this._chat = new ChatService(this.proxyUrl, this.orgId);
+    this._chat  = new ChatService(this.proxyUrl, this.orgId);
     this._audio = new AudioService(this.proxyUrl, this.orgId);
-    this._hl   = new DOMHighlighter(theme);
+    this._hl    = new DOMHighlighter(theme);
 
     this._guideQueue = [];
     this._guideTimer = null;
@@ -41,22 +45,23 @@ export class MwongozoWidget {
 
   async init() {
     const container = document.body;
-
-    // Mount UI components
     this._orb.mount(container);
     this._panel.mount(container);
 
-    // Load existing history
+    // Restore history
     this._panel.loadHistory(this._chat.history);
 
-    // Wire up orb
+    // Orb click → toggle panel
     this._orb.onClick(() => this._panel.toggle());
 
-    // Wire up panel
+    // Panel events
     this._panel.onSend((text) => this._handleUserInput(text));
     this._panel.onClear(() => {
       this._chat.clearHistory();
       this._hl.clearAll();
+    });
+    this._panel.onLangChange((lang) => {
+      this._lang = lang;
     });
 
     // PTT
@@ -66,16 +71,15 @@ export class MwongozoWidget {
     }
   }
 
-  // --- User input handling ---
+  // --- Input handling ---
 
   async _handleUserInput(text) {
+    const lang = this._lang;
     this._orb.setState('processing');
-    this._panel.setStatus('Nafikiri...');
+    this._panel.setStatus('statusThinking');
     this._panel.setInputEnabled(false);
     this._hl.clearAll();
     this._guideQueue = [];
-
-    let firstGuideFired = false;
 
     await this._chat.stream(text, getPageContext(), {
       onChunk: (chunk, full) => {
@@ -85,7 +89,6 @@ export class MwongozoWidget {
       },
 
       onGuide: (guide) => {
-        // Queue guides and fire them with a small delay so UI is visible first
         this._guideQueue.push(guide);
         if (!this._guideTimer) {
           this._guideTimer = setTimeout(() => this._drainGuides(), 800);
@@ -100,39 +103,39 @@ export class MwongozoWidget {
         this._guideTimer = null;
         this._drainGuides();
 
-        // Speak the response
-        try { await this._audio.speak(cleanText); } catch (_) {}
+        // Log to proxy analytics
+        this._logMessage('assistant', cleanText);
+
+        try { await this._audio.speak(cleanText, lang); } catch (_) {}
       },
 
       onError: (msg) => {
-        this._panel.addMessage('assistant',
-          `Samahani, kuna tatizo. / Sorry, there was an error: ${msg}`);
+        this._panel.addMessage('assistant', t(lang, 'errorGeneric'));
         this._panel.setStatus('');
         this._panel.setInputEnabled(true);
         this._orb.setState('idle');
       },
     });
+
+    // Log user message
+    this._logMessage('user', text);
   }
 
   _drainGuides() {
     this._guideTimer = null;
-    // Stagger highlights so they don't all appear at once
-    this._guideQueue.forEach((g, i) => {
-      setTimeout(() => this._hl.guide(g), i * 400);
-    });
+    this._guideQueue.forEach((g, i) => setTimeout(() => this._hl.guide(g), i * 400));
     this._guideQueue = [];
   }
 
-  // --- Voice recording ---
+  // --- Voice ---
 
   async _startRecording() {
     try {
       this._orb.setState('listening');
-      this._panel.setStatus('Sikiliza...');
+      this._panel.setStatus('statusListening');
       await this._audio.startRecording();
     } catch (err) {
-      console.warn('[mwz] Mic access denied:', err.message);
-      this._panel.setStatus('Ruhusa ya maikrofoni inahitajika');
+      this._panel.setStatus('statusMicDenied');
       this._orb.setState('idle');
     }
   }
@@ -140,19 +143,46 @@ export class MwongozoWidget {
   async _stopRecording() {
     try {
       this._orb.setState('processing');
-      this._panel.setStatus('Inabadilisha sauti...');
+      this._panel.setStatus('statusTranscribing');
       const text = await this._audio.stopRecording();
       if (text?.trim()) {
         this._panel.addMessage('user', text);
         await this._handleUserInput(text);
       } else {
-        this._panel.setStatus('Sauti haikueleweka. Jaribu tena.');
+        this._panel.setStatus('statusNoSpeech');
         this._orb.setState('idle');
       }
     } catch (err) {
-      console.error('[mwz] Transcription error:', err.message);
-      this._panel.setStatus('Hitilafu ya sauti. Jaribu tena.');
+      this._panel.setStatus('statusError');
       this._orb.setState('idle');
     }
+  }
+
+  // --- Analytics ---
+
+  _logMessage(role, text) {
+    try {
+      fetch(`${this.proxyUrl}/log`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Org-Id': this.orgId,
+        },
+        body: JSON.stringify({
+          role,
+          text,
+          page: location.href,
+          lang: this._lang,
+          sessionId: this._sessionId(),
+        }),
+      }).catch(() => {}); // fire-and-forget, never block UI
+    } catch (_) {}
+  }
+
+  _sessionId() {
+    if (!this.__sid) {
+      this.__sid = `${Date.now()}-${Math.random().toString(36).slice(2,7)}`;
+    }
+    return this.__sid;
   }
 }
