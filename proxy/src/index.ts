@@ -164,26 +164,48 @@ async function handleBigModelChat(body: string, env: Env): Promise<Response> {
 // /tts — ElevenLabs text-to-speech
 // ---------------------------------------------------------------------------
 
+// ElevenLabs free-tier premade voices that never require a paid plan
+const FREE_VOICES = [
+  'pNInz6obpgDQGcFmaJgB', // Adam
+  'EXAVITQu4vr4xnSDxMaL', // Bella
+  'MF3mGyEYCl7XYWbV9V6O', // Elli
+]
+
+async function ttsRequest(text: string, voice: string, apiKey: string): Promise<Response> {
+  return fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voice}`, {
+    method: 'POST',
+    headers: {
+      'xi-api-key':   apiKey,
+      'content-type': 'application/json',
+      accept:         'audio/mpeg',
+    },
+    body: JSON.stringify({
+      text,
+      model_id:      'eleven_flash_v2_5',
+      voice_settings: { stability: 0.5, similarity_boost: 0.75 },
+    }),
+  })
+}
+
 async function handleTts(request: Request, env: Env): Promise<Response> {
   const { text, voiceId } = await request.json() as { text: string; voiceId?: string }
-  const voice = voiceId ?? env.ELEVENLABS_VOICE_ID ?? '21m00Tcm4TlvDq8ikWAM'
+  const preferredVoice    = voiceId ?? env.ELEVENLABS_VOICE_ID ?? FREE_VOICES[0]
 
-  const upstream = await fetch(
-    `https://api.elevenlabs.io/v1/text-to-speech/${voice}`,
-    {
-      method: 'POST',
-      headers: {
-        'xi-api-key': env.ELEVENLABS_API_KEY,
-        'content-type': 'application/json',
-        accept: 'audio/mpeg',
-      },
-      body: JSON.stringify({
-        text,
-        model_id: 'eleven_flash_v2_5',
-        voice_settings: { stability: 0.5, similarity_boost: 0.75 },
-      }),
+  // Try the configured voice first
+  let upstream = await ttsRequest(text, preferredVoice, env.ELEVENLABS_API_KEY)
+
+  // On 402 (library/paid voice) or 401 (bad key), try free premade voices
+  if (!upstream.ok && (upstream.status === 402 || upstream.status === 401)) {
+    console.warn(`/tts voice ${preferredVoice} returned ${upstream.status} — retrying with free premade voice`)
+    for (const freeVoice of FREE_VOICES) {
+      if (freeVoice === preferredVoice) continue
+      upstream = await ttsRequest(text, freeVoice, env.ELEVENLABS_API_KEY)
+      if (upstream.ok) {
+        console.info(`/tts fell back to free voice ${freeVoice}`)
+        break
+      }
     }
-  )
+  }
 
   if (!upstream.ok) {
     const err = await upstream.text()

@@ -100,19 +100,28 @@ async function getLinuxContext(): Promise<AppContext> {
 }
 
 async function getWindowsContext(): Promise<AppContext> {
-  const ps = [
-    'Get-Process',
-    '| Where-Object {$_.MainWindowHandle -ne 0 -and $_.MainWindowTitle -ne ""}',
-    '| Sort-Object CPU -Desc',
-    '| Select-Object -First 1',
-    '  @{N="n";E={$_.ProcessName}},@{N="t";E={$_.MainWindowTitle}}',
-    '| ConvertTo-Json',
-  ].join(' ')
-
-  const { stdout } = await execAsync(`powershell -NoProfile -Command "${ps}"`, { timeout: 2500 })
-  const data        = JSON.parse(stdout.trim()) as { n?: string; t?: string }
-  const appName     = data.n?.trim() || 'Unknown'
-  const windowTitle = data.t?.trim() || ''
+  // Use -EncodedCommand (UTF-16 LE Base64) to avoid every quote-escaping problem
+  // that arises when passing complex PowerShell through exec() on Windows/MINGW64.
+  const script = `
+$p = Get-Process |
+  Where-Object { $_.MainWindowHandle -ne 0 -and $_.MainWindowTitle -ne [string]::Empty } |
+  Sort-Object CPU -Descending |
+  Select-Object -First 1
+if ($p) {
+  [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+  Write-Output ($p.ProcessName + [char]0x7C + $p.MainWindowTitle)
+}
+`
+  const encoded = Buffer.from(script, 'utf16le').toString('base64')
+  const { stdout } = await execAsync(
+    `powershell -NoProfile -NonInteractive -EncodedCommand ${encoded}`,
+    { timeout: 2500 },
+  )
+  const raw   = stdout.trim()
+  if (!raw) return UNKNOWN
+  const sep   = raw.indexOf('|')
+  const appName     = (sep < 0 ? raw : raw.slice(0, sep)).trim() || 'Unknown'
+  const windowTitle = (sep < 0 ? '' : raw.slice(sep + 1)).trim()
   return { appName, windowTitle, filePath: extractFilePath(windowTitle, appName) }
 }
 

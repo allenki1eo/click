@@ -160,6 +160,11 @@ const server = http.createServer(async (req, res) => {
         await handleChat(body, res, org, req);
         return;
       }
+      if (pathname === '/detect') {
+        if (req.method !== 'POST') { res.writeHead(405); res.end(); return; }
+        await handleComputerUseDetect(body, res);
+        return;
+      }
       if (pathname === '/tts') {
         if (req.method !== 'POST') { res.writeHead(405); res.end(); return; }
         await handleTTS(body, res, org);
@@ -273,6 +278,10 @@ async function handleChat(body, res, org, req) {
 
   if (model.includes('glm') || model.includes('bigmodel')) {
     await handleBigModelChat(parsed, res, origin, org);
+  } else if (model.startsWith('claude-') && process.env.ANTHROPIC_API_KEY) {
+    // Direct Anthropic API — used when desktop sends a claude-* model name
+    // and the key is configured; avoids OpenRouter markup & rate limits.
+    await handleAnthropicChat(parsed, res, origin, org);
   } else {
     await handleOpenRouterChat(JSON.stringify(parsed), res, origin, org);
   }
@@ -347,6 +356,210 @@ async function handleBigModelChat(parsed, res, origin, org) {
       res.writeHead(500, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: err.message }));
     }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Direct Anthropic chat (SSE streaming) — used when model is a claude-* name
+// and ANTHROPIC_API_KEY is set.  Converts OpenAI-compatible image_url content
+// blocks to Anthropic's native image source format before forwarding.
+// ---------------------------------------------------------------------------
+
+async function handleAnthropicChat(parsed, res, origin, org) {
+  if (!process.env.ANTHROPIC_API_KEY) {
+    res.writeHead(500, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'ANTHROPIC_API_KEY not configured' }));
+    return;
+  }
+
+  // Convert OpenAI-style image_url blocks → Anthropic image source blocks
+  const convertMessages = (msgs) => msgs.map((m) => {
+    if (!Array.isArray(m.content)) return m;
+    return {
+      ...m,
+      content: m.content.map((block) => {
+        if (block.type === 'image_url') {
+          const url = block.image_url?.url || '';
+          const b64 = url.includes(',') ? url.split(',')[1] : url;
+          const mediaType = url.startsWith('data:') ? url.slice(5, url.indexOf(';')) : 'image/jpeg';
+          return { type: 'image', source: { type: 'base64', media_type: mediaType, data: b64 } };
+        }
+        return block;
+      }),
+    };
+  });
+
+  const anthropicBody = JSON.stringify({
+    model:      parsed.model || 'claude-haiku-4-5-20251001',
+    max_tokens: parsed.max_tokens ?? 1200,
+    stream:     true,
+    messages:   convertMessages(parsed.messages || []),
+  });
+
+  console.log(`[Anthropic] model=${parsed.model || 'claude-haiku-4-5-20251001'}`);
+
+  // Anthropic SSE format differs from OpenAI — but we re-emit it as OpenAI
+  // so the client-side SSE reader doesn't need changes.
+  return new Promise((resolve, reject) => {
+    const req = require('https').request({
+      hostname: 'api.anthropic.com',
+      path:     '/v1/messages',
+      method:   'POST',
+      headers: {
+        'x-api-key':         process.env.ANTHROPIC_API_KEY,
+        'anthropic-version': '2023-06-01',
+        'content-type':      'application/json',
+      },
+    }, (upstream) => {
+      res.writeHead(upstream.statusCode, {
+        ...corsHeaders(origin, org),
+        'Content-Type':  'text/event-stream',
+        'Cache-Control': 'no-cache',
+      });
+
+      let buf = '';
+      upstream.on('data', (chunk) => {
+        buf += chunk.toString();
+        const lines = buf.split('\n');
+        buf = lines.pop();
+
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            const raw = line.slice(6).trim();
+            if (raw === '[DONE]' || !raw) continue;
+            try {
+              const evt = JSON.parse(raw);
+              // content_block_delta → emit as OpenAI delta format
+              if (evt.type === 'content_block_delta' && evt.delta?.type === 'text_delta') {
+                const openAiLike = { choices: [{ delta: { content: evt.delta.text } }] };
+                res.write(`data: ${JSON.stringify(openAiLike)}\n\n`);
+              } else if (evt.type === 'message_stop') {
+                res.write('data: [DONE]\n\n');
+              }
+            } catch { /* skip malformed */ }
+          }
+        }
+      });
+
+      upstream.on('end', () => { res.end(); resolve(); });
+      upstream.on('error', reject);
+    });
+
+    req.on('error', reject);
+    req.write(anthropicBody);
+    req.end();
+  });
+}
+
+// ---------------------------------------------------------------------------
+// /detect — Claude Computer Use API: given a screenshot + question, returns
+// the pixel coordinates of the most relevant UI element to click.
+// Returns {x, y} (display coordinates) or {x:null, y:null} if not found.
+// ---------------------------------------------------------------------------
+
+async function handleComputerUseDetect(body, res) {
+  const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY;
+  if (!ANTHROPIC_KEY) {
+    // Key not configured — caller will fall back to POINT tags from vision model
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ x: null, y: null }));
+    return;
+  }
+
+  let parsed;
+  try { parsed = JSON.parse(body); } catch {
+    res.writeHead(400, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'Invalid JSON' }));
+    return;
+  }
+
+  const {
+    screenshotBase64, userQuestion,
+    displayWidth, displayHeight,
+    cuWidth, cuHeight, appContext,
+  } = parsed;
+
+  const w = cuWidth  || displayWidth  || 1280;
+  const h = cuHeight || displayHeight || 800;
+
+  const contextLine = appContext ? `Active application: ${appContext}\n` : '';
+
+  const requestBody = JSON.stringify({
+    model:      'claude-sonnet-4-6',
+    max_tokens: 512,
+    tools: [{
+      type:               'computer_20250124',
+      name:               'computer',
+      display_width_px:   w,
+      display_height_px:  h,
+    }],
+    messages: [{
+      role: 'user',
+      content: [
+        {
+          type:   'image',
+          source: { type: 'base64', media_type: 'image/jpeg', data: screenshotBase64 },
+        },
+        {
+          type: 'text',
+          text: `${contextLine}The user asked: "${userQuestion}"\n\n` +
+                `Identify the single most relevant UI element to click in order to help with this task. ` +
+                `Use the computer tool to move the mouse to that element. ` +
+                `If no specific clickable element applies (e.g. purely informational question), do NOT use the tool.`,
+        },
+      ],
+    }],
+  });
+
+  console.log('[detect] Calling Anthropic Computer Use for:', userQuestion?.slice(0, 60));
+
+  try {
+    const result = await proxyRequest({
+      hostname: 'api.anthropic.com',
+      path:     '/v1/messages',
+      method:   'POST',
+      protocol: 'https:',
+      headers: {
+        'x-api-key':         ANTHROPIC_KEY,
+        'anthropic-version': '2023-06-01',
+        'anthropic-beta':    'computer-use-2025-01-24',
+        'content-type':      'application/json',
+      },
+    }, requestBody);
+
+    if (result.status !== 200) {
+      console.warn('[detect] Anthropic error', result.status, result.data.slice(0, 200));
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ x: null, y: null }));
+      return;
+    }
+
+    const data = JSON.parse(result.data);
+
+    // Find the first tool_use block with a coordinate action
+    let x = null, y = null;
+    for (const block of data.content || []) {
+      if (block.type === 'tool_use' && block.name === 'computer') {
+        const coord = block.input?.coordinate;
+        if (Array.isArray(coord) && coord.length === 2) {
+          // Scale from CU resolution back to display resolution
+          const scaleX = (displayWidth  || w) / w;
+          const scaleY = (displayHeight || h) / h;
+          x = Math.round(coord[0] * scaleX);
+          y = Math.round(coord[1] * scaleY);
+          console.info(`[detect] Computer Use → CU(${coord[0]},${coord[1]}) → display(${x},${y})`);
+          break;
+        }
+      }
+    }
+
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ x, y }));
+
+  } catch (err) {
+    console.error('[detect] Error:', err.message);
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ x: null, y: null }));
   }
 }
 

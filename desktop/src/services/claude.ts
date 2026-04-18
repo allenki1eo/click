@@ -101,7 +101,9 @@ export async function streamGuidance(opts: {
     screenWidth, screenHeight, personality, appContext, onChunk,
   } = opts
 
-  const model    = 'glm-5v-turbo'
+  // Prefer Claude via direct Anthropic key (proxy detects model name prefix).
+  // Falls back to GLM-5V-Turbo if no Anthropic key is configured on the proxy.
+  const model = 'claude-haiku-4-5-20251001'
   const question = transcript?.trim() || 'What do you see? Give me a brief summary and point to the main interactive element.'
   const personalityHint = PERSONALITY_HINTS[personality ?? 'friendly'] ?? PERSONALITY_HINTS['friendly']
 
