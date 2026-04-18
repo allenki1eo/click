@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Mwongozo SDK — TRA Demo</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: system-ui, sans-serif; margin: 0; background: #f9fafb; color: #111; }
+    header { background: #00843D; color: #fff; padding: 16px 24px; }
+    header h1 { margin: 0; font-size: 20px; }
+    header p  { margin: 4px 0 0; opacity: 0.8; font-size: 13px; }
+    main { max-width: 900px; margin: 40px auto; padding: 0 24px; }
+
+    .card {
+      background: #fff;
+      border-radius: 12px;
+      padding: 24px;
+      margin-bottom: 20px;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+    }
+    h2 { margin: 0 0 16px; font-size: 16px; color: #333; }
+    label { display: block; font-size: 13px; color: #555; margin-bottom: 6px; }
+    input, select {
+      width: 100%;
+      border: 1.5px solid #ddd;
+      border-radius: 8px;
+      padding: 9px 12px;
+      font-size: 14px;
+      margin-bottom: 14px;
+    }
+    button.primary {
+      background: #00843D;
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      padding: 10px 20px;
+      font-size: 14px;
+      cursor: pointer;
+    }
+    .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+
+    .note {
+      background: #fffbeb;
+      border: 1px solid #fde68a;
+      border-radius: 8px;
+      padding: 12px 16px;
+      font-size: 13px;
+      color: #92400e;
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>Tanzania Revenue Authority — iTax Portal (Demo)</h1>
+  <p>Mwongozo SDK integration demo. Click the green orb to chat!</p>
+</header>
+
+<main>
+  <div class="card">
+    <h2>TIN Registration</h2>
+    <p style="font-size:13px;color:#666;margin-bottom:16px">
+      Register for your Taxpayer Identification Number (TIN) below.
+      Need help? Click the assistant in the bottom right corner.
+    </p>
+    <div class="form-row">
+      <div>
+        <label>Full Name / Jina Kamili</label>
+        <input type="text" placeholder="e.g. Amina Hassan">
+      </div>
+      <div>
+        <label>NIDA Number</label>
+        <input type="text" placeholder="19XXXXXXXXXXXXXXXXX">
+      </div>
+    </div>
+    <div class="form-row">
+      <div>
+        <label>Date of Birth / Tarehe ya Kuzaliwa</label>
+        <input type="date">
+      </div>
+      <div>
+        <label>Taxpayer Type</label>
+        <select>
+          <option>Individual (Mtu Binafsi)</option>
+          <option>Company (Kampuni)</option>
+          <option>Partnership (Ushirika)</option>
+        </select>
+      </div>
+    </div>
+    <label>Email Address</label>
+    <input type="email" placeholder="amina@example.com">
+    <button class="primary">Apply for TIN / Omba TIN</button>
+  </div>
+
+  <div class="card">
+    <h2>VAT Return Filing</h2>
+    <div class="form-row">
+      <div>
+        <label>Filing Period</label>
+        <select>
+          <option>January 2025</option>
+          <option>February 2025</option>
+          <option>March 2025</option>
+        </select>
+      </div>
+      <div>
+        <label>TIN Number</label>
+        <input type="text" placeholder="Your TIN">
+      </div>
+    </div>
+    <div class="form-row">
+      <div>
+        <label>Total Sales (TSh)</label>
+        <input type="number" placeholder="0.00">
+      </div>
+      <div>
+        <label>Total Purchases (TSh)</label>
+        <input type="number" placeholder="0.00">
+      </div>
+    </div>
+    <button class="primary">Submit Return / Wasilisha Faili</button>
+  </div>
+
+  <div class="note">
+    <strong>SDK Integration Note:</strong> This demo loads the Mwongozo widget via the
+    <code>&lt;script&gt;</code> tag below. In production, replace
+    <code>data-proxy</code> with your deployed proxy URL and the widget will load
+    the full TRA knowledge base automatically.
+  </div>
+</main>
+
+<!--
+  Mwongozo Widget Integration — one line of code
+  Replace data-proxy with your deployed proxy server URL
+-->
+<script src="dist/widget.dev.js"
+        data-org="tra"
+        data-proxy="http://localhost:8787"
+        data-position="bottom-right">
+</script>
+
+</body>
+</html>

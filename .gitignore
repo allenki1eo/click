@@ -8,6 +8,8 @@ desktop/dist/
 proxy/dist/
 dashboard/.next/
 dashboard/out/
+sdk/dist/
+sdk/node_modules/
 
 # Electron packaged builds
 *.exe
