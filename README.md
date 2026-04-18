@@ -32,13 +32,18 @@ cp proxy/.env.example proxy/.env
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `OPENROUTER_API_KEY` | Yes (or BigModel) | Access Claude, GPT-4, Llama via OpenRouter |
-| `BIGMODEL_API_KEY` | No | For GLM-5V-Turbo (cheaper high-volume option) |
+| `ANTHROPIC_API_KEY` | **Recommended** | Direct Anthropic access — powers `/detect` (Computer Use precise coordinates) and Claude chat without OpenRouter markup |
+| `OPENROUTER_API_KEY` | Yes (or Anthropic) | Fallback when Anthropic key absent; accesses Claude + 200+ models |
+| `BIGMODEL_API_KEY` | No | GLM-5V-Turbo (cheaper high-volume vision option) |
 | `ELEVENLABS_API_KEY` | No | ElevenLabs text-to-speech |
 | `ELEVENLABS_VOICE_ID` | No | ElevenLabs voice (defaults to a neutral English voice) |
 | `ASSEMBLYAI_API_KEY` | No | AssemblyAI speech-to-text transcription |
 | `ADMIN_SECRET` | Recommended | Protects `/admin/*` endpoints; leave empty in dev |
 | `PORT` | No | Proxy port (default: `8787`) |
+
+> **ANTHROPIC_API_KEY** is the most important key for the desktop app. It enables:
+> - **`/detect`** — Claude Computer Use API pinpoints the exact UI element pixel coordinates from a screenshot (the orb cursor animation points directly at the right button)
+> - **`/chat`** — routes `claude-*` model requests directly to Anthropic (no OpenRouter cost markup, better rate limits)
 
 </details>
 
