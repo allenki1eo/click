@@ -131,19 +131,25 @@ export async function streamGuidance(opts: {
     `button labels, menu items, error messages, code, notifications, window titles. ` +
     `Reference exact on-screen text in your answer (quote labels, error strings, etc.).\n\n` +
     `RULES:\n` +
-    `1. Answer the question directly and concisely (≤3 sentences).\n` +
+    `1. RESPONSE FORMAT:\n` +
+    `   • For PROCEDURAL questions ("how do I…", "how to…", "what are the steps…"):\n` +
+    `     Write a numbered list, one action per step. Be brief per step (≤ 10 words).\n` +
+    `     Example: "1. Click Settings  2. Select Privacy  3. Toggle Screen Recording"\n` +
+    `   • For FACTUAL or CONCEPTUAL questions: answer in 1–2 concise sentences.\n` +
+    `   • For ERRORS or TROUBLESHOOTING: state the cause (1 sentence) then numbered fixes.\n` +
     // ── Feature 3: Multi-step STEP tags ────────────────────────────────────
     `2. If the task requires a SINGLE click on a specific UI element, append:\n` +
     `   [POINT:x,y:element name:screen0]\n` +
     `   where x,y = pixel coordinates of element centre using the anchor grid.\n` +
     `   Example: [POINT:${Math.round(W*0.78)},${Math.round(H*0.72)}:Submit button:screen0]\n\n` +
     `3. If the task requires MULTIPLE sequential clicks (e.g. "open Settings → Privacy → enable X"),\n` +
-    `   append one tag per step IN ORDER, numbered from 1:\n` +
+    `   append one STEP tag per step IN ORDER (matching your numbered text steps):\n` +
     `   [STEP:1:x,y:first element:screen0] [STEP:2:x,y:second element:screen0] ...\n` +
     `   Each step must target a VISIBLE element in the current screenshot.\n\n` +
     `4. Use POINT for single-click tasks. Use STEP tags for multi-click workflows.\n` +
     `5. Do NOT add any coordinate tag for purely conceptual / informational questions.\n` +
-    `6. Do NOT describe every element on screen — answer the specific question.`
+    `6. Do NOT describe every element on screen — answer the specific question.\n` +
+    `7. Do NOT start your reply with "Sure", "Of course", "Certainly" or any filler phrase.`
 
   const currentUserMessage = {
     role: 'user',

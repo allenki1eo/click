@@ -1,23 +1,24 @@
 /**
- * Orb renderer — the bottom-right floating character.
+ * Orb renderer — premium glassmorphism floating companion.
  *
- * • Two eyes that follow the system cursor in real-time
- * • Random blinking every 3-6 s
- * • Hover glow + press squeeze
- * • Clicking toggles the panel
- * • Reacts to companion state: listening / processing / responding
- * • Reacts to OrbConfig changes (theme colour)
+ * Design language:
+ *  • Multi-layer glass sphere (radial-gradient depth illusion)
+ *  • Dual counter-rotating conic-gradient rings (speed adapts to state)
+ *  • Aura glow with pulse animation
+ *  • Listening ripple rings
+ *  • Iris eyes with specular highlight + eyelid blink
+ *  • Breathing animation and smile that morphs per state
  */
 
 import React, { useEffect, useRef, useState } from 'react'
 import type { CompanionState, CompanionStatus, OrbConfig } from '../../shared/types'
 
-// ─── sizes ─────────────────────────────────────────────────────────────────
-const ORB        = 66
-const EYE_W      = 14
-const EYE_H      = 17
-const PUPIL      = 8
-const MAX_TRAVEL = 4.5
+// ─── size constants ─────────────────────────────────────────────────────────
+const ORB     = 76
+const EYE_W   = 15
+const EYE_H   = 19
+const PUPIL   = 9
+const MAX_TRAVEL = 5
 
 interface CursorPayload {
   cursorX: number; cursorY: number
@@ -25,38 +26,67 @@ interface CursorPayload {
   orbW:    number; orbH:    number
 }
 
-// ─── one eye ───────────────────────────────────────────────────────────────
+// ─── helper ─────────────────────────────────────────────────────────────────
+function hexRgb(hex: string): string {
+  const h = hex.replace('#', '')
+  return `${parseInt(h.slice(0,2),16)},${parseInt(h.slice(2,4),16)},${parseInt(h.slice(4,6),16)}`
+}
+
+// ─── Eye component ──────────────────────────────────────────────────────────
 function Eye({
-  px, py, blink, squint,
+  px, py, blink, squint, theme,
 }: {
-  px: number; py: number; blink: boolean; squint: boolean
+  px: number; py: number; blink: boolean; squint: boolean; theme: string
 }): React.ReactElement {
-  const h = blink ? 2 : squint ? Math.round(EYE_H * 0.45) : EYE_H
+  const h = blink ? 1 : squint ? Math.round(EYE_H * 0.4) : EYE_H
+  const rgb = hexRgb(theme)
+
   return (
     <div style={{
-      width:      EYE_W,
-      height:     h,
+      width:        EYE_W,
+      height:       h,
       borderRadius: '50%',
-      background: '#edfaed',
-      position:   'relative',
-      overflow:   'hidden',
-      flexShrink: 0,
-      boxShadow:  'inset 0 1px 4px rgba(0,0,0,0.18)',
-      transition: 'height 0.1s ease',
+      background:   'radial-gradient(circle at 40% 35%, rgba(255,255,255,0.98), rgba(230,242,255,0.9) 60%, rgba(210,230,255,0.82))',
+      boxShadow:    'inset 0 1.5px 4px rgba(0,0,0,0.18), 0 1px 2px rgba(255,255,255,0.3)',
+      position:     'relative',
+      overflow:     'hidden',
+      flexShrink:   0,
+      transition:   'height 0.09s ease',
     }}>
+      {/* Eyelid */}
       <div style={{
-        position:  'absolute',
-        width:     PUPIL, height: PUPIL,
+        position:     'absolute',
+        top: 0, left: 0, right: 0,
+        height:       blink ? '100%' : 0,
+        background:   `radial-gradient(circle at 50% 0%, rgba(${rgb},0.9), rgba(${rgb},0.7))`,
+        borderRadius: '0 0 50% 50%',
+        transition:   'height 0.08s ease',
+      }} />
+
+      {/* Pupil */}
+      <div style={{
+        position:     'absolute',
+        width: PUPIL, height: PUPIL,
         borderRadius: '50%',
-        background: '#0c1c0c',
+        background:   'radial-gradient(circle at 35% 30%, #1a1a2e, #05050f)',
         top: '50%', left: '50%',
-        transform: `translate(calc(-50% + ${px}px), calc(-50% + ${py}px))`,
+        transform:    `translate(calc(-50% + ${px}px), calc(-50% + ${py}px))`,
+        transition:   'transform 0.05s ease',
+        boxShadow:    '0 1px 3px rgba(0,0,0,0.5)',
       }}>
+        {/* Iris tint */}
         <div style={{
-          position: 'absolute',
+          position:     'absolute',
+          inset:        0,
+          borderRadius: '50%',
+          background:   `rgba(${rgb},0.18)`,
+        }} />
+        {/* Specular highlight */}
+        <div style={{
+          position:     'absolute',
           width: 3, height: 3,
           borderRadius: '50%',
-          background: 'rgba(255,255,255,0.92)',
+          background:   'rgba(255,255,255,0.95)',
           top: 1.5, left: 2,
         }} />
       </div>
@@ -64,22 +94,26 @@ function Eye({
   )
 }
 
-// ─── main component ────────────────────────────────────────────────────────
+// ─── main component ─────────────────────────────────────────────────────────
 export function App(): React.ReactElement {
   const [pupil,    setPupil]    = useState({ x: 0, y: 0 })
   const [hovered,  setHovered]  = useState(false)
   const [blink,    setBlink]    = useState(false)
   const [pressed,  setPressed]  = useState(false)
-  const [theme,    setTheme]    = useState('#10b981')
+  const [theme,    setTheme]    = useState('#6366f1')
   const [orbState, setOrbState] = useState<CompanionState>('idle')
   const blinkTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const ringRotRef = useRef(0)
+  const rafRef     = useRef<number>(0)
+  const ringEl1    = useRef<HTMLDivElement>(null)
+  const ringEl2    = useRef<HTMLDivElement>(null)
 
-  // ── load config + subscribe to changes ─────────────────────────────────
+  // ── config + status ─────────────────────────────────────────────────────
   useEffect(() => {
-    window.api.getOrbConfig().then((cfg: OrbConfig)           => setTheme(cfg.theme))
-    window.api.getStatus().then((s: CompanionStatus)           => setOrbState(s.state))
-    const u1 = window.api.onOrbConfig((cfg: OrbConfig)         => setTheme(cfg.theme))
-    const u2 = window.api.onStatus((s: CompanionStatus)        => setOrbState(s.state))
+    window.api.getOrbConfig().then((cfg: OrbConfig) => setTheme(cfg.theme))
+    window.api.getStatus().then((s: CompanionStatus) => setOrbState(s.state))
+    const u1 = window.api.onOrbConfig((cfg: OrbConfig) => setTheme(cfg.theme))
+    const u2 = window.api.onStatus((s: CompanionStatus) => setOrbState(s.state))
     return () => { u1(); u2() }
   }, [])
 
@@ -91,75 +125,90 @@ export function App(): React.ReactElement {
       const dx = d.cursorX - cx
       const dy = d.cursorY - cy
       const dist  = Math.sqrt(dx * dx + dy * dy)
-      const norm  = Math.min(dist / 180, 1)
+      const norm  = Math.min(dist / 200, 1)
       const angle = Math.atan2(dy, dx)
-      setPupil({ x: Math.cos(angle) * MAX_TRAVEL * norm, y: Math.sin(angle) * MAX_TRAVEL * norm })
+      setPupil({
+        x: Math.cos(angle) * MAX_TRAVEL * norm,
+        y: Math.sin(angle) * MAX_TRAVEL * norm,
+      })
     })
     return unsub
   }, [])
 
-  // ── random blinking ─────────────────────────────────────────────────────
+  // ── blink ────────────────────────────────────────────────────────────────
   useEffect(() => {
     const schedule = (): void => {
       blinkTimer.current = setTimeout(() => {
         setBlink(true)
         setTimeout(() => { setBlink(false); schedule() }, 110)
-      }, 3000 + Math.random() * 3500)
+      }, 2800 + Math.random() * 3800)
     }
     schedule()
     return () => { if (blinkTimer.current) clearTimeout(blinkTimer.current) }
   }, [])
 
-  // ── click ───────────────────────────────────────────────────────────────
+  // ── ring animation (rAF) ─────────────────────────────────────────────────
+  const orbStateRef = useRef(orbState)
+  useEffect(() => { orbStateRef.current = orbState }, [orbState])
+
+  useEffect(() => {
+    const animate = (): void => {
+      const s = orbStateRef.current
+      const speed = s === 'processing' ? 3.5
+        : s === 'listening'  ? 2.2
+        : s === 'responding' ? 1.8
+        : 0.55
+      ringRotRef.current = (ringRotRef.current + speed) % 360
+      if (ringEl1.current) ringEl1.current.style.transform = `rotate(${ringRotRef.current}deg)`
+      if (ringEl2.current) ringEl2.current.style.transform = `rotate(${-ringRotRef.current * 0.55}deg)`
+      rafRef.current = requestAnimationFrame(animate)
+    }
+    rafRef.current = requestAnimationFrame(animate)
+    return () => cancelAnimationFrame(rafRef.current)
+  }, [])
+
+  // ── click ────────────────────────────────────────────────────────────────
   function handleClick(): void {
     setPressed(true)
-    setTimeout(() => setPressed(false), 140)
+    setTimeout(() => setPressed(false), 130)
     window.api.orbClick()
   }
 
-  // ── derive visual properties from state ────────────────────────────────
-  const scale   = pressed ? 0.86 : hovered ? 1.07 : 1.0
+  // ── derived visuals ──────────────────────────────────────────────────────
+  const rgb     = hexRgb(theme)
   const squint  = orbState === 'processing'
-  const excited = orbState === 'responding'
+  const scale   = pressed ? 0.85 : hovered ? 1.09 : 1.0
+  const smileW  = orbState === 'responding' ? 34 : orbState === 'listening' ? 22 : 28
+  const smileAlpha = orbState === 'responding' ? 'e6' : orbState === 'idle' && hovered ? 'cc' : '88'
 
-  // Halo speed & intensity
-  const haloAnimation = orbState === 'processing'
-    ? 'halo 1.2s ease-in-out infinite'
+  // State-specific body shadow
+  const bodyShadow = (() => {
+    if (orbState === 'listening')  return `0 0 0 1.5px rgba(${rgb},0.35), 0 0 32px rgba(${rgb},0.85), 0 0 60px rgba(${rgb},0.4), 0 12px 40px rgba(0,0,0,0.45), inset 0 1.5px 0 rgba(255,255,255,0.45), inset 0 -2px 6px rgba(0,0,0,0.25)`
+    if (orbState === 'processing') return `0 0 0 1.5px rgba(${rgb},0.15), 0 0 20px rgba(${rgb},0.5), 0 10px 30px rgba(0,0,0,0.55), inset 0 1.5px 0 rgba(255,255,255,0.28), inset 0 -2px 6px rgba(0,0,0,0.35)`
+    if (orbState === 'responding') return `0 0 0 1.5px rgba(255,255,255,0.28), 0 0 40px rgba(${rgb},0.92), 0 0 80px rgba(${rgb},0.45), 0 16px 48px rgba(0,0,0,0.38), inset 0 1.5px 0 rgba(255,255,255,0.52), inset 0 -2px 6px rgba(0,0,0,0.18)`
+    if (hovered)                   return `0 0 0 1.5px rgba(255,255,255,0.2), 0 0 28px rgba(${rgb},0.7), 0 12px 36px rgba(0,0,0,0.45), inset 0 1.5px 0 rgba(255,255,255,0.42), inset 0 -2px 6px rgba(0,0,0,0.22)`
+    return `0 0 0 1.5px rgba(255,255,255,0.12), 0 0 14px rgba(${rgb},0.45), 0 8px 24px rgba(0,0,0,0.5), inset 0 1.5px 0 rgba(255,255,255,0.36), inset 0 -2px 6px rgba(0,0,0,0.28)`
+  })()
+
+  const bodyBrightness = orbState === 'processing' ? 'brightness(0.88) saturate(0.75)' : orbState === 'responding' ? 'brightness(1.06)' : 'none'
+
+  // Aura pulse speed
+  const auraAnimation = orbState === 'listening'
+    ? 'mwz-aura 1.2s ease-in-out infinite'
+    : orbState === 'processing'
+    ? 'mwz-aura 1.8s ease-in-out infinite'
+    : 'mwz-aura 3.2s ease-in-out infinite'
+
+  // Body breathe animation
+  const breatheAnimation = orbState === 'idle'
+    ? 'mwz-breathe 4s ease-in-out infinite'
     : orbState === 'listening'
-    ? 'halo 1.8s ease-in-out infinite'
-    : 'halo 2.8s ease-in-out infinite'
+    ? 'mwz-breathe-fast 1.1s ease-in-out infinite'
+    : orbState === 'responding'
+    ? 'mwz-breathe 2.2s ease-in-out infinite'
+    : 'none'
 
-  const glowAlpha = orbState === 'listening' ? '5c'
-    : orbState === 'processing' ? '3d'
-    : orbState === 'responding' ? '70'
-    : hovered ? '61' : '2e'
-
-  // Body colour from theme
-  const r = parseInt(theme.slice(1, 3), 16)
-  const g = parseInt(theme.slice(3, 5), 16)
-  const b = parseInt(theme.slice(5, 7), 16)
-  const bodyLight = `rgb(${Math.round(r * 0.28)}, ${Math.round(g * 0.32)}, ${Math.round(b * 0.22)})`
-  const bodyMid   = `rgb(${Math.round(r * 0.16)}, ${Math.round(g * 0.20)}, ${Math.round(b * 0.12)})`
-  const bodyDark  = `rgb(${Math.round(r * 0.08)}, ${Math.round(g * 0.12)}, ${Math.round(b * 0.06)})`
-
-  // Border brightness by state
-  const borderAlpha = orbState === 'listening' ? 'ff'
-    : orbState === 'responding' ? 'ff'
-    : orbState === 'processing' ? 'cc'
-    : hovered ? 'e6' : '85'
-
-  // Glow ring radius changes when processing
-  const shadowStr = orbState === 'processing'
-    ? `0 0 22px ${theme}a0, 0 0 40px ${theme}44, 0 8px 22px rgba(0,0,0,0.65)`
-    : orbState === 'listening'
-    ? `0 0 28px ${theme}b0, 0 8px 22px rgba(0,0,0,0.65)`
-    : hovered
-    ? `0 0 26px ${theme}99, 0 8px 22px rgba(0,0,0,0.65)`
-    : `0 0 12px ${theme}47, 0 5px 14px rgba(0,0,0,0.55)`
-
-  // Smile arc — wider when responding
-  const smileW = excited ? 32 : 26
-  const smileAlpha = (orbState === 'responding' || hovered) ? 'd9' : '80'
+  const WRAP = ORB + 32  // wrapper size
 
   return (
     <div
@@ -173,109 +222,173 @@ export function App(): React.ReactElement {
         userSelect: 'none', WebkitUserSelect: 'none',
       } as React.CSSProperties}
     >
-      {/* Pulsing halo */}
-      <div style={{
-        position: 'absolute',
-        width: ORB + 28, height: ORB + 28,
-        borderRadius: '50%',
-        background: `radial-gradient(circle, ${theme}${glowAlpha} 0%, transparent 68%)`,
-        animation: haloAnimation,
-        pointerEvents: 'none',
-        transition: 'background 0.3s ease',
-      }} />
-
-      {/* Processing ring spinner */}
-      {orbState === 'processing' && (
-        <div style={{
-          position: 'absolute',
-          width: ORB + 10, height: ORB + 10,
-          borderRadius: '50%',
-          border: `2px solid transparent`,
-          borderTopColor: theme + 'cc',
-          borderRightColor: theme + '55',
-          animation: 'spin 1s linear infinite',
-          pointerEvents: 'none',
-        }} />
-      )}
-
-      {/* Orb body */}
-      <div style={{
-        width: ORB, height: ORB,
-        borderRadius: '50%',
-        background: `radial-gradient(circle at 38% 30%, ${bodyLight} 0%, ${bodyMid} 50%, ${bodyDark} 100%)`,
-        border: `2px solid ${theme}${borderAlpha}`,
-        boxShadow: shadowStr,
-        position: 'relative', overflow: 'hidden',
-        transform: `scale(${scale})`,
-        transition: 'transform 0.13s cubic-bezier(.34,1.56,.64,1), border-color 0.2s, box-shadow 0.2s, background 0.4s',
-      }}>
-        {/* Gloss */}
-        <div style={{
-          position: 'absolute', top: 7, left: 12,
-          width: 24, height: 13, borderRadius: '50%',
-          background: 'rgba(255,255,255,0.13)',
-          transform: 'rotate(-28deg)', pointerEvents: 'none',
-        }} />
-
-        {/* Rim shimmer */}
-        <div style={{
-          position: 'absolute', bottom: 4, left: '50%',
-          transform: 'translateX(-50%)',
-          width: 38, height: 7, borderRadius: '50%',
-          background: `${theme}38`, pointerEvents: 'none',
-        }} />
-
-        {/* Eyes */}
-        <div style={{
-          position: 'absolute', top: '38%', left: '50%',
-          transform: 'translate(-50%, -50%)',
-          display: 'flex', gap: 10,
-        }}>
-          <Eye px={pupil.x} py={pupil.y} blink={blink} squint={squint} />
-          <Eye px={pupil.x} py={pupil.y} blink={blink} squint={squint} />
-        </div>
-
-        {/* Smile */}
-        <div style={{
-          position: 'absolute', bottom: 12, left: '50%',
-          transform: 'translateX(-50%)',
-          width: smileW, height: 10,
-          borderBottom: `2px solid ${theme}${smileAlpha}`,
-          borderRadius: '0 0 50% 50%',
-          transition: 'border-color 0.2s, width 0.2s',
-          pointerEvents: 'none',
-        }} />
-      </div>
-
-      {/* State label (listening / responding) */}
-      {(orbState === 'listening' || orbState === 'responding') && (
-        <div style={{
-          position: 'absolute',
-          top: '50%',
-          left: '50%',
-          transform: 'translateX(-50%) translateY(calc(-50% + 42px))',
-          fontSize: 9,
-          fontWeight: 600,
-          letterSpacing: '0.08em',
-          textTransform: 'uppercase',
-          color: theme,
-          pointerEvents: 'none',
-          whiteSpace: 'nowrap',
-        }}>
-          {orbState === 'listening' ? '● REC' : '♪'}
-        </div>
-      )}
-
       <style>{`
-        @keyframes halo {
-          0%, 100% { transform: scale(1);    opacity: 0.75; }
-          50%       { transform: scale(1.15); opacity: 1;    }
+        @keyframes mwz-aura {
+          0%,100% { transform: scale(1);    opacity: 0.55; }
+          50%      { transform: scale(1.18); opacity: 1;    }
         }
-        @keyframes spin {
-          from { transform: rotate(0deg); }
-          to   { transform: rotate(360deg); }
+        @keyframes mwz-breathe {
+          0%,100% { transform: scale(1) translateY(0); }
+          50%      { transform: scale(1.028) translateY(-1px); }
+        }
+        @keyframes mwz-breathe-fast {
+          0%,100% { transform: scale(1) translateY(0); }
+          50%      { transform: scale(1.055) translateY(-2px); }
+        }
+        @keyframes mwz-ripple {
+          0%   { transform: translate(-50%,-50%) scale(1); opacity: 0.55; }
+          100% { transform: translate(-50%,-50%) scale(2.4); opacity: 0; }
+        }
+        @keyframes mwz-state-badge-in {
+          from { opacity:0; transform:scale(0.7) translateY(-2px); }
+          to   { opacity:1; transform:scale(1) translateY(0); }
         }
       `}</style>
+
+      {/* ── Wrapper ────────────────────────────────────────────────────── */}
+      <div style={{ position: 'relative', width: WRAP, height: WRAP, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+
+        {/* ── Aura ───────────────────────────────────────────────────── */}
+        <div style={{
+          position:     'absolute',
+          width:        ORB + 52, height: ORB + 52,
+          borderRadius: '50%',
+          background:   `radial-gradient(circle, rgba(${rgb},0.3) 0%, transparent 68%)`,
+          animation:    auraAnimation,
+          pointerEvents:'none',
+        }} />
+
+        {/* ── Animated gradient rings ─────────────────────────────────── */}
+        <div style={{
+          position: 'absolute',
+          width: ORB + 18, height: ORB + 18,
+          borderRadius: '50%', pointerEvents: 'none',
+        }}>
+          {/* Ring 1 — primary arc */}
+          <div ref={ringEl1} style={{
+            position:     'absolute', inset: 0,
+            borderRadius: '50%',
+            border:       '2px solid transparent',
+            background:   `transparent padding-box, conic-gradient(from 0deg, transparent 0%, ${theme} 22%, rgba(${rgb},0.4) 40%, transparent 50%) border-box`,
+            opacity:      orbState === 'idle' ? 0.65 : 0.92,
+          }} />
+          {/* Ring 2 — secondary arc (counter-rotating) */}
+          <div ref={ringEl2} style={{
+            position:     'absolute', inset: 0,
+            borderRadius: '50%',
+            border:       '1.5px solid transparent',
+            background:   `transparent padding-box, conic-gradient(from 0deg, transparent 55%, rgba(${rgb},0.35) 72%, transparent 82%) border-box`,
+            opacity:      orbState === 'idle' ? 0.45 : 0.7,
+          }} />
+        </div>
+
+        {/* ── Listening ripples ───────────────────────────────────────── */}
+        {orbState === 'listening' && [0, 0.7, 1.4].map((delay, i) => (
+          <div key={i} style={{
+            position:     'absolute',
+            top: '50%', left: '50%',
+            width:        ORB, height: ORB,
+            borderRadius: '50%',
+            border:       `1.5px solid rgba(${rgb},0.55)`,
+            animation:    `mwz-ripple 2s ease-out ${delay}s infinite`,
+            pointerEvents:'none',
+          }} />
+        ))}
+
+        {/* ── Orb body ────────────────────────────────────────────────── */}
+        <div style={{
+          width:        ORB, height: ORB,
+          borderRadius: '50%',
+          position:     'relative',
+          overflow:     'hidden',
+          cursor:       'pointer',
+          transform:    `scale(${scale})`,
+          transition:   'transform 0.14s cubic-bezier(.34,1.56,.64,1)',
+          animation:    breatheAnimation,
+          filter:       bodyBrightness !== 'none' ? bodyBrightness : undefined,
+          background:   [
+            `radial-gradient(circle at 34% 28%, rgba(255,255,255,0.44) 0%, transparent 36%)`,
+            `radial-gradient(circle at 72% 76%, rgba(${rgb},0.2) 0%, transparent 32%)`,
+            `radial-gradient(circle at 50% 50%, rgba(${rgb},0.95) 0%, rgba(${rgb},0.8) 42%, rgba(${rgb},0.58) 100%)`,
+          ].join(','),
+          boxShadow:    bodyShadow,
+        }}>
+          {/* Primary glass gloss */}
+          <div style={{
+            position:     'absolute', top: 9, left: 13,
+            width: 24, height: 13, borderRadius: '50%',
+            background:   'rgba(255,255,255,0.38)',
+            transform:    'rotate(-30deg)',
+            filter:       'blur(1px)',
+            pointerEvents:'none',
+          }} />
+          {/* Secondary micro-gloss */}
+          <div style={{
+            position:     'absolute', top: 19, left: 22,
+            width: 9, height: 5, borderRadius: '50%',
+            background:   'rgba(255,255,255,0.22)',
+            pointerEvents:'none',
+          }} />
+          {/* Bottom rim sheen */}
+          <div style={{
+            position:     'absolute', bottom: 8, left: '50%',
+            transform:    'translateX(-50%)',
+            width: 42, height: 8, borderRadius: '50%',
+            background:   `rgba(${rgb},0.28)`,
+            filter:       'blur(3px)',
+            pointerEvents:'none',
+          }} />
+
+          {/* Eyes */}
+          <div style={{
+            position:  'absolute', top: '38%', left: '50%',
+            transform: 'translate(-50%, -50%)',
+            display:   'flex', gap: 11,
+          }}>
+            <Eye px={pupil.x} py={pupil.y} blink={blink} squint={squint} theme={theme} />
+            <Eye px={pupil.x} py={pupil.y} blink={blink} squint={squint} theme={theme} />
+          </div>
+
+          {/* Smile */}
+          <div style={{
+            position:     'absolute', bottom: 13, left: '50%',
+            transform:    'translateX(-50%)',
+            width:        smileW, height: 10,
+            borderBottom: orbState === 'processing'
+              ? 'none'
+              : `2px solid ${theme}${smileAlpha}`,
+            borderTop: orbState === 'processing'
+              ? `2px solid rgba(${rgb},0.35)`
+              : 'none',
+            borderRadius: orbState === 'processing' ? '50% 50% 0 0' : '0 0 50% 50%',
+            transition:   'width 0.3s ease, border-color 0.3s ease',
+            pointerEvents:'none',
+          }} />
+        </div>
+
+        {/* ── State badge ──────────────────────────────────────────────── */}
+        {(orbState === 'listening' || orbState === 'responding') && (
+          <div style={{
+            position:    'absolute',
+            top:         -4, right: -8,
+            background:  orbState === 'listening' ? 'rgba(239,68,68,0.92)' : `rgba(${rgb},0.92)`,
+            color:       '#fff',
+            fontSize:    9,
+            fontWeight:  700,
+            fontFamily:  'system-ui, sans-serif',
+            letterSpacing:'0.05em',
+            padding:     '3px 6px',
+            borderRadius: 8,
+            whiteSpace:  'nowrap',
+            boxShadow:   '0 2px 8px rgba(0,0,0,0.35)',
+            border:      '1px solid rgba(255,255,255,0.2)',
+            animation:   'mwz-state-badge-in 0.2s ease',
+            pointerEvents:'none',
+          }}>
+            {orbState === 'listening' ? '● REC' : '♪'}
+          </div>
+        )}
+      </div>
     </div>
   )
 }

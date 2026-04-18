@@ -203,9 +203,21 @@ const server = http.createServer(async (req, res) => {
   });
 });
 
+// Universal response-format instruction appended to every org system prompt
+const RESPONSE_FORMAT_RULES = `
+
+## RESPONSE FORMAT RULES
+- For PROCEDURAL questions ("how do I…", "steps to…", "how to…"):
+  Reply with a numbered list, one action per step, ≤ 10 words each.
+  Example: "1. Click Settings  2. Go to Privacy  3. Enable the toggle"
+- For FACTUAL or CONCEPTUAL questions: answer in 1–2 concise sentences.
+- For ERRORS / TROUBLESHOOTING: state the cause (1 sentence) then numbered fixes.
+- Never start with "Sure", "Of course", "Certainly" or similar filler.
+- Keep language simple and direct. Prefer active voice.`;
+
 // Inject org system prompt + role context + RAG chunks into messages
 function injectOrgContext(messages, org, userRole, ragChunks) {
-  let systemContent = org?.systemPrompt || '';
+  let systemContent = (org?.systemPrompt || '') + RESPONSE_FORMAT_RULES;
 
   // Role-specific addendum
   if (userRole && org?.roles?.[userRole]) {
@@ -220,8 +232,6 @@ function injectOrgContext(messages, org, userRole, ragChunks) {
     });
     systemContent += '\nUse the above documentation passages to give accurate, specific answers.';
   }
-
-  if (!systemContent) return messages;
 
   if (messages[0]?.role === 'system') {
     return [
