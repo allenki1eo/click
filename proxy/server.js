@@ -1,6 +1,6 @@
 /**
- * Mwongozo Proxy Server
- * Supports multiple AI providers: OpenRouter AND BigModel.cn (Zhipu AI)
+ * Mwongozo Proxy Server — Multi-tenant edition
+ * Supports TRA, BRELA, CRDB, NMB and any custom org.
  *
  * Usage: node server.js
  * Port: 8787
@@ -10,10 +10,11 @@ const http = require('http');
 const https = require('https');
 const url = require('url');
 const fs = require('fs');
+const path = require('path');
 
-// Load environment variables from .env file if it exists
+// Load .env
 try {
-  const envContent = fs.readFileSync('.env', 'utf8');
+  const envContent = fs.readFileSync(path.join(__dirname, '.env'), 'utf8');
   envContent.split('\n').forEach(line => {
     const idx = line.indexOf('=');
     if (idx > 0) {
@@ -22,26 +23,52 @@ try {
       if (key && value) process.env[key] = value;
     }
   });
-} catch (e) {
-  // No .env file, rely on environment variables
+} catch (e) { /* rely on env vars */ }
+
+const PORT = process.env.PORT || 8787;
+const ORGS_DIR = path.join(__dirname, 'orgs');
+
+// Cache loaded org configs
+const orgCache = new Map();
+
+function loadOrg(orgId) {
+  if (!orgId) return null;
+  const safe = orgId.replace(/[^a-z0-9_-]/gi, '');
+  if (orgCache.has(safe)) return orgCache.get(safe);
+  try {
+    const file = path.join(ORGS_DIR, `${safe}.json`);
+    const org = JSON.parse(fs.readFileSync(file, 'utf8'));
+    orgCache.set(safe, org);
+    return org;
+  } catch (e) {
+    return null;
+  }
 }
 
-const PORT = 8787;
+function corsHeaders(origin, org) {
+  const allowed = org?.allowedOrigins ?? [];
+  const originOk = !origin || allowed.length === 0 ||
+    allowed.some(o => origin.includes(o));
 
-const CORS_HEADERS = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'POST, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type',
-};
+  return {
+    'Access-Control-Allow-Origin': originOk ? (origin || '*') : '',
+    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type, X-Org-Id',
+    'Access-Control-Max-Age': '86400',
+  };
+}
 
 function proxyRequest(options, postData) {
   return new Promise((resolve, reject) => {
     const client = options.protocol === 'https:' ? https : http;
     const req = client.request(options, (res) => {
-      let data = '';
-      res.setEncoding('utf8');
-      res.on('data', (chunk) => data += chunk);
-      res.on('end', () => resolve({ status: res.statusCode, data, headers: res.headers }));
+      const chunks = [];
+      res.on('data', chunk => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
+      res.on('end', () => resolve({
+        status: res.statusCode,
+        data: Buffer.concat(chunks).toString('utf8'),
+        headers: res.headers,
+      }));
     });
     req.on('error', reject);
     if (postData) req.write(postData);
@@ -53,13 +80,11 @@ function proxyRequestStream(options, postData, res) {
   return new Promise((resolve, reject) => {
     const client = options.protocol === 'https:' ? https : http;
     const upstreamReq = client.request(options, (upstreamRes) => {
-      // Forward status and headers
       res.writeHead(upstreamRes.statusCode, {
-        ...CORS_HEADERS,
+        ...corsHeaders(),
         'Content-Type': upstreamRes.headers['content-type'] || 'text/event-stream',
         'Cache-Control': 'no-cache',
       });
-      // Pipe the response directly
       upstreamRes.pipe(res);
       upstreamRes.on('end', resolve);
     });
@@ -70,12 +95,41 @@ function proxyRequestStream(options, postData, res) {
 }
 
 const server = http.createServer(async (req, res) => {
-  // Set CORS headers
-  Object.entries(CORS_HEADERS).forEach(([key, value]) => res.setHeader(key, value));
+  const origin = req.headers['origin'] || '';
+  const orgId = req.headers['x-org-id'] || '';
+  const org = loadOrg(orgId);
+  const cors = corsHeaders(origin, org);
+
+  Object.entries(cors).forEach(([k, v]) => v && res.setHeader(k, v));
 
   if (req.method === 'OPTIONS') {
     res.writeHead(204);
     res.end();
+    return;
+  }
+
+  const pathname = url.parse(req.url).pathname;
+
+  // GET /config — return org branding for widget initialization
+  if (req.method === 'GET' && pathname === '/config') {
+    const qOrg = url.parse(req.url, true).query.org || orgId;
+    const cfg = loadOrg(qOrg);
+    if (!cfg) {
+      res.writeHead(404, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Unknown org' }));
+      return;
+    }
+    // Return only public fields (not full system prompt)
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+      id: cfg.id,
+      name: cfg.name,
+      fullName: cfg.fullName,
+      theme: cfg.theme,
+      language: cfg.language,
+      welcomeMessage: cfg.welcomeMessage,
+      suggestedQuestions: cfg.suggestedQuestions,
+    }));
     return;
   }
 
@@ -85,64 +139,76 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  const pathname = url.parse(req.url).pathname;
-
-  // Collect body as Buffer so we can handle both JSON and binary (audio) endpoints
   const chunks = [];
   req.on('data', chunk => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
   req.on('end', async () => {
     const bodyBuffer = Buffer.concat(chunks);
-    const body = bodyBuffer.toString('utf8'); // string view for JSON endpoints
+    const body = bodyBuffer.toString('utf8');
 
     try {
       if (pathname === '/chat') {
-        await handleChat(body, res);
+        await handleChat(body, res, org);
         return;
       }
-
       if (pathname === '/tts') {
-        await handleTTS(body, res);
+        await handleTTS(body, res, org);
         return;
       }
-
       if (pathname === '/transcribe') {
         await handleTranscribe(bodyBuffer, res);
         return;
       }
-
       res.writeHead(404, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: 'Not found' }));
     } catch (err) {
       console.error(`[${pathname}] Error:`, err.message);
-      res.writeHead(500, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: err.message }));
+      if (!res.headersSent) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err.message }));
+      }
     }
   });
 });
 
-// Handle chat requests - route to appropriate provider
-async function handleChat(body, res) {
+// Inject org system prompt as first system message
+function injectOrgContext(messages, org) {
+  if (!org?.systemPrompt) return messages;
+
+  // If first message is already a system message, prepend org prompt to it
+  if (messages[0]?.role === 'system') {
+    return [
+      { role: 'system', content: `${org.systemPrompt}\n\n---\n\n${messages[0].content}` },
+      ...messages.slice(1),
+    ];
+  }
+  return [
+    { role: 'system', content: org.systemPrompt },
+    ...messages,
+  ];
+}
+
+async function handleChat(body, res, org) {
   let parsed;
-  try {
-    parsed = JSON.parse(body);
-  } catch (e) {
+  try { parsed = JSON.parse(body); } catch (e) {
     res.writeHead(400, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ error: 'Invalid JSON' }));
     return;
   }
 
+  // Inject org knowledge into messages
+  if (org) {
+    parsed.messages = injectOrgContext(parsed.messages || [], org);
+  }
+
   const model = parsed.model || '';
 
-  // Route to BigModel.cn for GLM models
   if (model.includes('glm') || model.includes('bigmodel')) {
     await handleBigModelChat(parsed, res);
   } else {
-    // Default to OpenRouter
-    await handleOpenRouterChat(body, res);
+    await handleOpenRouterChat(JSON.stringify(parsed), res);
   }
 }
 
-// OpenRouter chat handler
 async function handleOpenRouterChat(body, res) {
   if (!process.env.OPENROUTER_API_KEY) {
     res.writeHead(500, { 'Content-Type': 'application/json' });
@@ -150,7 +216,7 @@ async function handleOpenRouterChat(body, res) {
     return;
   }
 
-  console.log('[OpenRouter] Routing to OpenRouter');
+  console.log('[OpenRouter] Routing chat request');
 
   const options = {
     hostname: 'openrouter.ai',
@@ -176,12 +242,10 @@ async function handleOpenRouterChat(body, res) {
   }
 }
 
-// BigModel.cn (Zhipu AI) chat handler - streaming via proxyRequestStream
 async function handleBigModelChat(parsed, res) {
   if (!process.env.BIGMODEL_API_KEY) {
-    console.error('[BigModel] BIGMODEL_API_KEY is not set in .env — cannot route to GLM');
     res.writeHead(500, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ error: 'BIGMODEL_API_KEY not configured. Add it to proxy/.env' }));
+    res.end(JSON.stringify({ error: 'BIGMODEL_API_KEY not configured' }));
     return;
   }
 
@@ -192,7 +256,7 @@ async function handleBigModelChat(parsed, res) {
     max_tokens: parsed.max_tokens ?? 800,
   });
 
-  console.log(`[BigModel] Routing to BigModel.cn — model=${parsed.model || 'glm-5v-turbo'}`);
+  console.log(`[BigModel] model=${parsed.model || 'glm-5v-turbo'}`);
 
   const options = {
     hostname: 'open.bigmodel.cn',
@@ -209,7 +273,7 @@ async function handleBigModelChat(parsed, res) {
   try {
     await proxyRequestStream(options, bigModelBody, res);
   } catch (err) {
-    console.error('[BigModel] Stream error:', err.message);
+    console.error('[BigModel] Error:', err.message);
     if (!res.headersSent) {
       res.writeHead(500, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: err.message }));
@@ -217,8 +281,7 @@ async function handleBigModelChat(parsed, res) {
   }
 }
 
-// TTS handler
-async function handleTTS(body, res) {
+async function handleTTS(body, res, org) {
   const { text, voiceId } = JSON.parse(body);
   const voice = voiceId || process.env.ELEVENLABS_VOICE_ID || '21m00Tcm4TlvDq8ikWAM';
 
@@ -245,29 +308,22 @@ async function handleTTS(body, res) {
   res.end(Buffer.from(upstream.data, 'binary'));
 }
 
-// Full transcription pipeline — upload audio, submit job, poll until done
-// The client POSTs raw audio bytes; the proxy handles all AssemblyAI API calls
-// using the server-side API key. This avoids exposing the key to the client and
-// fixes the previous bug where a streaming v3 token was incorrectly used for the
-// batch v2 REST API (they are completely different auth systems).
 async function handleTranscribe(audioBuffer, res) {
   if (!process.env.ASSEMBLYAI_API_KEY) {
-    console.error('[transcribe] ASSEMBLYAI_API_KEY is not set — cannot transcribe');
     res.writeHead(500, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ error: 'ASSEMBLYAI_API_KEY not configured. Add it to proxy/.env' }));
+    res.end(JSON.stringify({ error: 'ASSEMBLYAI_API_KEY not configured' }));
     return;
   }
 
   if (!audioBuffer || audioBuffer.length === 0) {
     res.writeHead(400, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ error: 'No audio data received', text: '' }));
+    res.end(JSON.stringify({ error: 'No audio data', text: '' }));
     return;
   }
 
-  console.log(`[transcribe] Received ${audioBuffer.length} bytes of audio`);
+  console.log(`[transcribe] ${audioBuffer.length} bytes`);
 
   try {
-    // Step 1: Upload audio to AssemblyAI
     const uploadResult = await proxyRequest({
       hostname: 'api.assemblyai.com',
       path: '/v2/upload',
@@ -280,13 +336,11 @@ async function handleTranscribe(audioBuffer, res) {
       }
     }, audioBuffer);
 
-    if (uploadResult.status < 200 || uploadResult.status >= 300) {
-      throw new Error(`Upload failed (${uploadResult.status}): ${uploadResult.data}`);
-    }
-    const { upload_url } = JSON.parse(uploadResult.data);
-    console.log('[transcribe] Audio uploaded successfully');
+    if (uploadResult.status < 200 || uploadResult.status >= 300)
+      throw new Error(`Upload failed (${uploadResult.status})`);
 
-    // Step 2: Submit transcription job
+    const { upload_url } = JSON.parse(uploadResult.data);
+
     const txBody = JSON.stringify({ audio_url: upload_url });
     const txResult = await proxyRequest({
       hostname: 'api.assemblyai.com',
@@ -300,13 +354,12 @@ async function handleTranscribe(audioBuffer, res) {
       }
     }, txBody);
 
-    if (txResult.status < 200 || txResult.status >= 300) {
-      throw new Error(`Transcript submit failed (${txResult.status}): ${txResult.data}`);
-    }
-    const { id } = JSON.parse(txResult.data);
-    console.log('[transcribe] Job submitted, ID:', id);
+    if (txResult.status < 200 || txResult.status >= 300)
+      throw new Error(`Transcript submit failed (${txResult.status})`);
 
-    // Step 3: Poll until completed (max 20 × 1.5s = 30s)
+    const { id } = JSON.parse(txResult.data);
+    console.log('[transcribe] Job ID:', id);
+
     for (let i = 0; i < 20; i++) {
       await sleep(1500);
       const pollResult = await proxyRequest({
@@ -316,22 +369,17 @@ async function handleTranscribe(audioBuffer, res) {
         protocol: 'https:',
         headers: { 'Authorization': process.env.ASSEMBLYAI_API_KEY }
       });
-
       const data = JSON.parse(pollResult.data);
       if (data.status === 'completed') {
         const text = data.text?.trim() ?? '';
-        console.log('[transcribe] Completed:', text || '(empty)');
+        console.log('[transcribe] Done:', text || '(empty)');
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ text }));
         return;
       }
-      if (data.status === 'error') {
-        throw new Error(`AssemblyAI error: ${data.error}`);
-      }
-      console.log(`[transcribe] Status: ${data.status} (${i + 1}/20)`);
+      if (data.status === 'error') throw new Error(`AssemblyAI: ${data.error}`);
     }
-
-    throw new Error('Transcription timed out after 30s');
+    throw new Error('Transcription timed out');
   } catch (err) {
     console.error('[transcribe] FAILED:', err.message);
     if (!res.headersSent) {
@@ -341,21 +389,13 @@ async function handleTranscribe(audioBuffer, res) {
   }
 }
 
-function sleep(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 server.listen(PORT, () => {
-  console.log(`Mwongozo proxy server running on http://localhost:${PORT}`);
-  console.log('');
-  console.log('AI Provider (at least one required):');
-  console.log('  - OPENROUTER_API_KEY - For OpenRouter models');
-  console.log('  - BIGMODEL_API_KEY - For BigModel.cn (GLM-5V-Turbo)');
-  console.log('');
-  console.log('Other services:');
-  console.log('  - ELEVENLABS_API_KEY - For text-to-speech');
-  console.log('  - ELEVENLABS_VOICE_ID (optional, defaults to 21m00Tcm4TlvDq8ikWAM)');
-  console.log('  - ASSEMBLYAI_API_KEY - For voice transcription (POST /transcribe)');
-  console.log('');
-  console.log('Copy proxy/.env.example to proxy/.env and fill in your API keys.');
+  console.log(`\nMwongozo proxy — http://localhost:${PORT}`);
+  console.log(`Orgs loaded from: ${ORGS_DIR}`);
+  const orgs = fs.readdirSync(ORGS_DIR).filter(f => f.endsWith('.json')).map(f => f.replace('.json', ''));
+  console.log(`Available orgs: ${orgs.join(', ')}`);
+  console.log('\nRequired env vars: OPENROUTER_API_KEY or BIGMODEL_API_KEY');
+  console.log('Optional: ELEVENLABS_API_KEY, ASSEMBLYAI_API_KEY\n');
 });

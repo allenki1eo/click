@@ -1,0 +1,15 @@
+{
+  "name": "@mwongozo/sdk",
+  "version": "1.0.0",
+  "description": "Mwongozo web widget SDK — embeddable AI assistant for East African enterprise portals",
+  "main": "dist/widget.js",
+  "scripts": {
+    "build": "esbuild src/index.js --bundle --format=iife --global-name=MwongozoSDK --outfile=dist/widget.js --minify",
+    "build:dev": "esbuild src/index.js --bundle --format=iife --global-name=MwongozoSDK --outfile=dist/widget.dev.js --sourcemap",
+    "watch": "esbuild src/index.js --bundle --format=iife --global-name=MwongozoSDK --outfile=dist/widget.dev.js --sourcemap --watch"
+  },
+  "devDependencies": {
+    "esbuild": "^0.21.0"
+  },
+  "license": "MIT"
+}
