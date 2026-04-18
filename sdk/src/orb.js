@@ -216,7 +216,7 @@ export class OrbComponent {
           border-radius: 50%;
           border: 2px solid transparent;
           background:
-            linear-gradient(#000, #000) padding-box,
+            transparent padding-box,
             conic-gradient(
               from 0deg,
               transparent 0%,
@@ -229,7 +229,7 @@ export class OrbComponent {
         #ring2 {
           border-color: transparent;
           background:
-            linear-gradient(#000, #000) padding-box,
+            transparent padding-box,
             conic-gradient(
               from 0deg,
               transparent 50%,

@@ -54,8 +54,8 @@ function corsHeaders(origin, org) {
 
   return {
     'Access-Control-Allow-Origin': originOk ? (origin || '*') : '',
-    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type, X-Org-Id',
+    'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type, X-Org-Id, X-Admin-Secret',
     'Access-Control-Max-Age': '86400',
   };
 }
@@ -78,12 +78,12 @@ function proxyRequest(options, postData) {
   });
 }
 
-function proxyRequestStream(options, postData, res) {
+function proxyRequestStream(options, postData, res, origin, org) {
   return new Promise((resolve, reject) => {
     const client = options.protocol === 'https:' ? https : http;
     const upstreamReq = client.request(options, (upstreamRes) => {
       res.writeHead(upstreamRes.statusCode, {
-        ...corsHeaders(),
+        ...corsHeaders(origin, org),
         'Content-Type': upstreamRes.headers['content-type'] || 'text/event-stream',
         'Cache-Control': 'no-cache',
       });
@@ -135,7 +135,14 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  if (req.method !== 'POST') {
+  // Health check (no body needed)
+  if (req.method === 'GET' && pathname === '/health') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ status: 'ok', ts: Date.now() }));
+    return;
+  }
+
+  if (!['GET', 'POST', 'DELETE'].includes(req.method)) {
     res.writeHead(405, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ error: 'Method not allowed' }));
     return;
@@ -149,18 +156,22 @@ const server = http.createServer(async (req, res) => {
 
     try {
       if (pathname === '/chat') {
+        if (req.method !== 'POST') { res.writeHead(405); res.end(); return; }
         await handleChat(body, res, org, req);
         return;
       }
       if (pathname === '/tts') {
+        if (req.method !== 'POST') { res.writeHead(405); res.end(); return; }
         await handleTTS(body, res, org);
         return;
       }
       if (pathname === '/transcribe') {
+        if (req.method !== 'POST') { res.writeHead(405); res.end(); return; }
         await handleTranscribe(bodyBuffer, res);
         return;
       }
       if (pathname === '/log') {
+        if (req.method !== 'POST') { res.writeHead(405); res.end(); return; }
         await handleLog(body, res, org);
         return;
       }
@@ -248,14 +259,16 @@ async function handleChat(body, res, org, req) {
 
   const model = parsed.model || '';
 
+  const origin = req?.headers['origin'] || '';
+
   if (model.includes('glm') || model.includes('bigmodel')) {
-    await handleBigModelChat(parsed, res);
+    await handleBigModelChat(parsed, res, origin, org);
   } else {
-    await handleOpenRouterChat(JSON.stringify(parsed), res);
+    await handleOpenRouterChat(JSON.stringify(parsed), res, origin, org);
   }
 }
 
-async function handleOpenRouterChat(body, res) {
+async function handleOpenRouterChat(body, res, origin, org) {
   if (!process.env.OPENROUTER_API_KEY) {
     res.writeHead(500, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ error: 'OPENROUTER_API_KEY not configured' }));
@@ -278,7 +291,7 @@ async function handleOpenRouterChat(body, res) {
   };
 
   try {
-    await proxyRequestStream(options, body, res);
+    await proxyRequestStream(options, body, res, origin, org);
   } catch (err) {
     console.error('[OpenRouter] Error:', err.message);
     if (!res.headersSent) {
@@ -288,7 +301,7 @@ async function handleOpenRouterChat(body, res) {
   }
 }
 
-async function handleBigModelChat(parsed, res) {
+async function handleBigModelChat(parsed, res, origin, org) {
   if (!process.env.BIGMODEL_API_KEY) {
     res.writeHead(500, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ error: 'BIGMODEL_API_KEY not configured' }));
@@ -317,7 +330,7 @@ async function handleBigModelChat(parsed, res) {
   };
 
   try {
-    await proxyRequestStream(options, bigModelBody, res);
+    await proxyRequestStream(options, bigModelBody, res, origin, org);
   } catch (err) {
     console.error('[BigModel] Error:', err.message);
     if (!res.headersSent) {
