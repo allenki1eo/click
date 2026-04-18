@@ -1,6 +1,7 @@
 /**
  * MwongozoWidget — main orchestrator.
- * Wires together Orb, Panel, ChatService, AudioService, DOMHighlighter, PageContext.
+ * Wires together Orb, Panel, ChatService, AudioService, DOMHighlighter,
+ * PageContext, and AuthContext.
  */
 
 import { OrbComponent }   from './orb.js';
@@ -9,12 +10,13 @@ import { ChatService }    from './chat.js';
 import { AudioService }   from './audio.js';
 import { DOMHighlighter } from './highlighter.js';
 import { getPageContext } from './context.js';
+import { getUserContext } from './auth.js';
 import { detectLang, t } from './i18n.js';
 
 export class MwongozoWidget {
   constructor(config) {
-    this.orgId    = config.orgId    || 'default';
-    this.proxyUrl = config.proxyUrl || 'http://localhost:8787';
+    this.orgId     = config.orgId    || 'default';
+    this.proxyUrl  = config.proxyUrl || 'http://localhost:8787';
     this.orgConfig = config.orgConfig || {};
 
     const theme = this.orgConfig.theme || config.theme || '#00843D';
@@ -24,16 +26,14 @@ export class MwongozoWidget {
     this._lang = lang;
 
     this._orb = new OrbComponent({
-      theme,
-      name,
+      theme, name,
       position: config.position || 'bottom-right',
     });
     this._panel = new PanelComponent({
-      theme,
-      name,
-      welcomeMessage:      this.orgConfig.welcomeMessage,
-      suggestedQuestions:  this.orgConfig.suggestedQuestions || [],
-      language:            lang,
+      theme, name,
+      welcomeMessage:     this.orgConfig.welcomeMessage,
+      suggestedQuestions: this.orgConfig.suggestedQuestions || [],
+      language: lang,
     });
     this._chat  = new ChatService(this.proxyUrl, this.orgId);
     this._audio = new AudioService(this.proxyUrl, this.orgId);
@@ -41,34 +41,39 @@ export class MwongozoWidget {
 
     this._guideQueue = [];
     this._guideTimer = null;
+    this._userContext = null; // set during init
   }
 
   async init() {
+    // Read auth context from host page
+    this._userContext = getUserContext();
+
     const container = document.body;
     this._orb.mount(container);
     this._panel.mount(container);
 
-    // Restore history
+    // Personalise welcome if we know the user's name
+    if (this._userContext?.name && this.orgConfig.welcomeMessage) {
+      // Already handled by org config; personalisation can be added by orgs
+    }
+
     this._panel.loadHistory(this._chat.history);
 
-    // Orb click → toggle panel
     this._orb.onClick(() => this._panel.toggle());
-
-    // Panel events
     this._panel.onSend((text) => this._handleUserInput(text));
     this._panel.onClear(() => {
       this._chat.clearHistory();
       this._hl.clearAll();
     });
-    this._panel.onLangChange((lang) => {
-      this._lang = lang;
-    });
+    this._panel.onLangChange((lang) => { this._lang = lang; });
 
-    // PTT
     if (this._audio.canRecord) {
       this._panel.onPttStart(() => this._startRecording());
       this._panel.onPttEnd(()   => this._stopRecording());
     }
+
+    // Expose globally for programmatic control
+    window.mwongozo = this;
   }
 
   // --- Input handling ---
@@ -81,7 +86,10 @@ export class MwongozoWidget {
     this._hl.clearAll();
     this._guideQueue = [];
 
-    await this._chat.stream(text, getPageContext(), {
+    // Log user message
+    this._logMessage('user', text);
+
+    await this._chat.stream(text, getPageContext(), this._userContext, {
       onChunk: (chunk, full) => {
         this._orb.setState('responding');
         this._panel.streamChunk(chunk, full);
@@ -102,23 +110,17 @@ export class MwongozoWidget {
         this._orb.setState('idle');
         this._guideTimer = null;
         this._drainGuides();
-
-        // Log to proxy analytics
         this._logMessage('assistant', cleanText);
-
         try { await this._audio.speak(cleanText, lang); } catch (_) {}
       },
 
-      onError: (msg) => {
+      onError: () => {
         this._panel.addMessage('assistant', t(lang, 'errorGeneric'));
         this._panel.setStatus('');
         this._panel.setInputEnabled(true);
         this._orb.setState('idle');
       },
     });
-
-    // Log user message
-    this._logMessage('user', text);
   }
 
   _drainGuides() {
@@ -134,7 +136,7 @@ export class MwongozoWidget {
       this._orb.setState('listening');
       this._panel.setStatus('statusListening');
       await this._audio.startRecording();
-    } catch (err) {
+    } catch (_) {
       this._panel.setStatus('statusMicDenied');
       this._orb.setState('idle');
     }
@@ -152,7 +154,7 @@ export class MwongozoWidget {
         this._panel.setStatus('statusNoSpeech');
         this._orb.setState('idle');
       }
-    } catch (err) {
+    } catch (_) {
       this._panel.setStatus('statusError');
       this._orb.setState('idle');
     }
@@ -164,25 +166,20 @@ export class MwongozoWidget {
     try {
       fetch(`${this.proxyUrl}/log`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Org-Id': this.orgId,
-        },
+        headers: { 'Content-Type': 'application/json', 'X-Org-Id': this.orgId },
         body: JSON.stringify({
-          role,
-          text,
-          page: location.href,
-          lang: this._lang,
+          role, text,
+          page:      location.href,
+          lang:      this._lang,
           sessionId: this._sessionId(),
+          userRole:  this._userContext?.role || null,
         }),
-      }).catch(() => {}); // fire-and-forget, never block UI
+      }).catch(() => {});
     } catch (_) {}
   }
 
   _sessionId() {
-    if (!this.__sid) {
-      this.__sid = `${Date.now()}-${Math.random().toString(36).slice(2,7)}`;
-    }
+    if (!this.__sid) this.__sid = `${Date.now()}-${Math.random().toString(36).slice(2,7)}`;
     return this.__sid;
   }
 }

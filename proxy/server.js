@@ -12,6 +12,7 @@ const url = require('url');
 const fs = require('fs');
 const path = require('path');
 const analytics = require('./analytics');
+const rag       = require('./rag');
 
 // Load .env
 try {
@@ -148,7 +149,7 @@ const server = http.createServer(async (req, res) => {
 
     try {
       if (pathname === '/chat') {
-        await handleChat(body, res, org);
+        await handleChat(body, res, org, req);
         return;
       }
       if (pathname === '/tts') {
@@ -175,6 +176,10 @@ const server = http.createServer(async (req, res) => {
         await handleAdminKnowledge(req, res, body, org);
         return;
       }
+      if (pathname === '/admin/documents') {
+        await handleAdminDocuments(req, res, body, bodyBuffer, org);
+        return;
+      }
       res.writeHead(404, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: 'Not found' }));
     } catch (err) {
@@ -187,24 +192,36 @@ const server = http.createServer(async (req, res) => {
   });
 });
 
-// Inject org system prompt as first system message
-function injectOrgContext(messages, org) {
-  if (!org?.systemPrompt) return messages;
+// Inject org system prompt + role context + RAG chunks into messages
+function injectOrgContext(messages, org, userRole, ragChunks) {
+  let systemContent = org?.systemPrompt || '';
 
-  // If first message is already a system message, prepend org prompt to it
+  // Role-specific addendum
+  if (userRole && org?.roles?.[userRole]) {
+    systemContent += `\n\n## USER ROLE\n${org.roles[userRole]}`;
+  }
+
+  // RAG retrieved passages
+  if (ragChunks?.length > 0) {
+    systemContent += '\n\n## RELEVANT DOCUMENTATION (retrieved for this query)\n';
+    ragChunks.forEach(c => {
+      systemContent += `\n[Source: ${c.filename}]\n${c.text}\n`;
+    });
+    systemContent += '\nUse the above documentation passages to give accurate, specific answers.';
+  }
+
+  if (!systemContent) return messages;
+
   if (messages[0]?.role === 'system') {
     return [
-      { role: 'system', content: `${org.systemPrompt}\n\n---\n\n${messages[0].content}` },
+      { role: 'system', content: `${systemContent}\n\n---\n\n${messages[0].content}` },
       ...messages.slice(1),
     ];
   }
-  return [
-    { role: 'system', content: org.systemPrompt },
-    ...messages,
-  ];
+  return [{ role: 'system', content: systemContent }, ...messages];
 }
 
-async function handleChat(body, res, org) {
+async function handleChat(body, res, org, req) {
   let parsed;
   try { parsed = JSON.parse(body); } catch (e) {
     res.writeHead(400, { 'Content-Type': 'application/json' });
@@ -212,9 +229,21 @@ async function handleChat(body, res, org) {
     return;
   }
 
-  // Inject org knowledge into messages
+  // Resolve user role (from X-User-Role header or message body)
+  const userRole = req?.headers['x-user-role'] || parsed.userRole || null;
+
+  // RAG: retrieve relevant chunks for the user's query
+  let ragChunks = [];
+  if (org?.id && rag.hasDocuments(org.id)) {
+    const lastUserMsg = [...(parsed.messages || [])].reverse().find(m => m.role === 'user');
+    if (lastUserMsg?.content) {
+      ragChunks = rag.search(org.id, lastUserMsg.content, 5);
+    }
+  }
+
+  // Inject org knowledge + role context + RAG into messages
   if (org) {
-    parsed.messages = injectOrgContext(parsed.messages || [], org);
+    parsed.messages = injectOrgContext(parsed.messages || [], org, userRole, ragChunks);
   }
 
   const model = parsed.model || '';
@@ -480,6 +509,59 @@ async function handleAdminKnowledge(req, res, body, org) {
 }
 
 const json = { 'Content-Type': 'application/json' };
+
+// GET /admin/documents?org= — list documents
+// POST /admin/documents?org= — upload new document (text body or JSON {filename, text})
+// DELETE /admin/documents?org=&id= — remove document
+async function handleAdminDocuments(req, res, body, bodyBuffer, org) {
+  if (!requireAdmin(req, res)) return;
+  const q    = url.parse(req.url, true).query;
+  const qOrg = q.org || org?.id;
+  if (!qOrg) { res.writeHead(400, json); res.end(JSON.stringify({ error: 'org required' })); return; }
+
+  if (req.method === 'GET') {
+    const docs = rag.listDocuments(qOrg);
+    res.writeHead(200, json);
+    res.end(JSON.stringify(docs));
+    return;
+  }
+
+  if (req.method === 'DELETE') {
+    const docId = q.id;
+    if (!docId) { res.writeHead(400, json); res.end(JSON.stringify({ error: 'id required' })); return; }
+    rag.removeDocument(qOrg, docId);
+    res.writeHead(200, json); res.end(JSON.stringify({ ok: true }));
+    return;
+  }
+
+  // POST — upload document
+  try {
+    const ct = req.headers['content-type'] || '';
+    let filename, text;
+
+    if (ct.includes('application/json')) {
+      ({ filename, text } = JSON.parse(body));
+    } else {
+      // Plain text upload — filename from Content-Disposition header or query param
+      filename = q.filename || req.headers['x-filename'] || 'document.txt';
+      text     = bodyBuffer.toString('utf8');
+    }
+
+    if (!text?.trim()) throw new Error('Empty document');
+
+    const docId = `${Date.now()}-${Math.random().toString(36).slice(2,7)}`;
+    rag.addDocument(qOrg, docId, filename || 'document.txt', text);
+
+    const docs = rag.listDocuments(qOrg);
+    const doc  = docs.find(d => d.id === docId);
+    console.log(`[rag] ${qOrg}: added "${filename}" → ${doc?.chunks} chunks`);
+
+    res.writeHead(200, json);
+    res.end(JSON.stringify({ ok: true, id: docId, chunks: doc?.chunks }));
+  } catch (e) {
+    res.writeHead(400, json); res.end(JSON.stringify({ error: e.message }));
+  }
+}
 
 function requireAdmin(req, res) {
   const secret = process.env.ADMIN_SECRET;

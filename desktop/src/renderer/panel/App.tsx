@@ -430,18 +430,21 @@ const PERSONALITIES: { value: OrbConfig['personality']; label: string; desc: str
 ]
 
 function SettingsTab({
-  config, proxyUrl, onSaveConfig, onSaveProxy,
+  config, proxyUrl, initialOrgId, onSaveConfig, onSaveProxy,
 }: {
-  config:       OrbConfig
-  proxyUrl:     string
-  onSaveConfig: (cfg: Partial<OrbConfig>) => void
-  onSaveProxy:  (url: string) => void
+  config:        OrbConfig
+  proxyUrl:      string
+  initialOrgId:  string
+  onSaveConfig:  (cfg: Partial<OrbConfig>) => void
+  onSaveProxy:   (url: string) => void
 }): React.ReactElement {
   const [name,  setName]  = useState(config.name)
   const [proxy, setProxy] = useState(proxyUrl)
+  const [orgId, setOrgId] = useState(initialOrgId)
 
   useEffect(() => { setName(config.name) }, [config.name])
   useEffect(() => { setProxy(proxyUrl) },   [proxyUrl])
+  useEffect(() => { setOrgId(initialOrgId) }, [initialOrgId])
 
   function handleNameBlur(e: React.FocusEvent<HTMLInputElement>): void {
     e.currentTarget.style.borderColor = 'rgba(255,255,255,0.1)'
@@ -559,6 +562,31 @@ function SettingsTab({
         </p>
       </section>
 
+      {/* Organisation (white-labeling) */}
+      <section>
+        <label className="block text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">
+          Organisation
+        </label>
+        <select
+          value={orgId}
+          onChange={(e) => {
+            setOrgId(e.target.value)
+            window.api.setOrgId(e.target.value)
+          }}
+          className={inputClass}
+          style={{ cursor: 'pointer' }}
+        >
+          <option value="">None (generic assistant)</option>
+          <option value="tra">TRA — Tanzania Revenue Authority</option>
+          <option value="brela">BRELA — Business Registrations</option>
+          <option value="crdb">CRDB Bank</option>
+          <option value="nmb">NMB Bank</option>
+        </select>
+        <p className="text-xs text-gray-600 mt-1.5">
+          Loads organisation-specific knowledge and branding from the proxy.
+        </p>
+      </section>
+
       {/* Wake word */}
       <section>
         <div className="flex items-center justify-between">
@@ -610,6 +638,7 @@ export function App(): React.ReactElement {
   const [tab,           setTab]            = useState<Tab>('chat')
   const [orbCfg,        setOrbCfg]         = useState<OrbConfig>({ name: 'Mwongozo', theme: '#10b981', personality: 'friendly', wakeWordEnabled: false })
   const [proxyUrl,      setProxyUrlState]  = useState('http://localhost:8787')
+  const [orgIdState,    setOrgIdState]     = useState('')
 
   const [transcribing,  setTranscribing]  = useState(false)
 
@@ -627,6 +656,7 @@ export function App(): React.ReactElement {
     window.api.getStatus().then(setStatus)
     window.api.getOrbConfig().then(setOrbCfg)
     window.api.getProxyUrl().then(setProxyUrlState)
+    window.api.getOrgId?.().then(setOrgIdState)
 
     // Restore persisted conversation history
     window.api.getHistory().then((history) => {
@@ -968,6 +998,7 @@ export function App(): React.ReactElement {
         <SettingsTab
           config={orbCfg}
           proxyUrl={proxyUrl}
+          initialOrgId={orgIdState}
           onSaveConfig={handleSaveConfig}
           onSaveProxy={handleSaveProxy}
         />

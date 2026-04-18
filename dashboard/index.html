@@ -211,6 +211,7 @@
     <div class="nav-item active" data-page="overview">📊 Overview</div>
     <div class="nav-item" data-page="conversations">💬 Conversations</div>
     <div class="nav-item" data-page="knowledge">📚 Knowledge Base</div>
+    <div class="nav-item" data-page="documents">📄 Documents</div>
     <div class="nav-item" data-page="settings">⚙️ Settings</div>
     <div class="sidebar-footer">Mwongozo Admin v1.0</div>
   </nav>
@@ -300,6 +301,48 @@
         </div>
       </div>
 
+      <!-- Documents page -->
+      <div class="page" id="page-documents">
+        <div class="alert alert-success" id="doc-success"></div>
+        <div class="alert alert-error"   id="doc-error"></div>
+
+        <div class="card" style="margin-bottom:20px">
+          <div class="card-header">
+            <span class="card-title">Upload Document</span>
+          </div>
+          <div style="padding:20px;display:flex;flex-direction:column;gap:12px;max-width:560px">
+            <p style="font-size:13px;color:var(--muted);line-height:1.6">
+              Upload manuals, FAQs, policy documents, or any text the AI should know about.
+              The RAG engine will retrieve the most relevant passages automatically for each user query.
+              Supported: <strong>.txt</strong>, <strong>.md</strong>, or paste text directly.
+            </p>
+            <div class="form-group">
+              <label class="form-label">Document Name</label>
+              <input type="text" id="doc-name" placeholder="e.g. TRA iTax User Manual 2024">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Upload file (.txt / .md)</label>
+              <input type="file" id="doc-file" accept=".txt,.md,.text" style="border:none;padding:0">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Or paste document text</label>
+              <textarea id="doc-text" rows="8" placeholder="Paste the document content here..."></textarea>
+            </div>
+            <button class="btn btn-primary" id="upload-doc">Upload Document</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <span class="card-title">Uploaded Documents</span>
+            <span id="doc-count" style="font-size:13px;color:var(--muted)"></span>
+          </div>
+          <div id="doc-list">
+            <div class="loading"><div class="spinner"></div>Loading...</div>
+          </div>
+        </div>
+      </div>
+
       <!-- Settings -->
       <div class="page" id="page-settings">
         <div class="card">
@@ -361,7 +404,7 @@ async function apiFetch(path, opts = {}) {
 }
 
 // ── Navigation ───────────────────────────────────────────────────────────────
-const pages   = { overview: 'Overview', conversations: 'Conversations', knowledge: 'Knowledge Base', settings: 'Settings' };
+const pages   = { overview: 'Overview', conversations: 'Conversations', knowledge: 'Knowledge Base', documents: 'Documents', settings: 'Settings' };
 const navItems = document.querySelectorAll('.nav-item');
 
 navItems.forEach(item => {
@@ -390,6 +433,7 @@ function loadPage(page) {
   if (page === 'overview')       loadOverview();
   if (page === 'conversations')  loadConversations();
   if (page === 'knowledge')      loadKnowledge();
+  if (page === 'documents')      loadDocuments();
   if (page === 'settings')       loadSettings();
 }
 
@@ -562,6 +606,82 @@ function showAlert(id, msg) {
 function hideAlerts() {
   document.querySelectorAll('.alert').forEach(a => a.classList.remove('show'));
 }
+
+// ── Documents ─────────────────────────────────────────────────────────────────
+async function loadDocuments() {
+  hideAlerts();
+  const list = document.getElementById('doc-list');
+  list.innerHTML = '<div class="loading"><div class="spinner"></div>Loading...</div>';
+  try {
+    const docs = await apiFetch(`/admin/documents?org=${currentOrg()}`);
+    document.getElementById('doc-count').textContent = `${docs.length} document${docs.length !== 1 ? 's' : ''}`;
+    if (!docs.length) {
+      list.innerHTML = '<div class="empty">No documents uploaded yet. Upload manuals, FAQs, or policies above.</div>';
+      return;
+    }
+    list.innerHTML = `
+      <table>
+        <thead><tr><th>Filename</th><th>Chunks</th><th>Size</th><th>Added</th><th></th></tr></thead>
+        <tbody>
+          ${docs.map(d => `
+            <tr>
+              <td><strong>${escHtml(d.filename)}</strong></td>
+              <td>${d.chunks} chunks</td>
+              <td>${(d.size / 1024).toFixed(1)} KB</td>
+              <td>${fmt(d.addedAt)}</td>
+              <td><button class="btn btn-sm" style="color:#dc2626;border:1.5px solid #dc2626;background:#fff"
+                  onclick="deleteDoc('${d.id}')">Delete</button></td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>`;
+  } catch(e) {
+    list.innerHTML = `<div class="empty">Error: ${e.message}</div>`;
+  }
+}
+
+async function deleteDoc(id) {
+  if (!confirm('Delete this document? The AI will no longer use it.')) return;
+  try {
+    await apiFetch(`/admin/documents?org=${currentOrg()}&id=${id}`, { method: 'DELETE' });
+    showAlert('doc-success', '✓ Document deleted.');
+    loadDocuments();
+  } catch(e) {
+    showAlert('doc-error', `Delete failed: ${e.message}`);
+  }
+}
+
+document.getElementById('upload-doc').addEventListener('click', async () => {
+  hideAlerts();
+  const name    = document.getElementById('doc-name').value.trim();
+  const fileEl  = document.getElementById('doc-file');
+  const textEl  = document.getElementById('doc-text');
+  const file    = fileEl.files?.[0];
+
+  let text = textEl.value.trim();
+  let filename = name || (file ? file.name : 'document.txt');
+
+  if (file && !text) {
+    text = await file.text();
+    if (!name) filename = file.name;
+  }
+
+  if (!text) { showAlert('doc-error', 'Please provide document text or upload a file.'); return; }
+
+  try {
+    const result = await apiFetch(`/admin/documents?org=${currentOrg()}`, {
+      method: 'POST',
+      body: JSON.stringify({ filename, text }),
+    });
+    showAlert('doc-success', `✓ "${filename}" uploaded — ${result.chunks} chunks indexed.`);
+    document.getElementById('doc-name').value = '';
+    document.getElementById('doc-text').value = '';
+    fileEl.value = '';
+    loadDocuments();
+  } catch(e) {
+    showAlert('doc-error', `Upload failed: ${e.message}`);
+  }
+});
 
 // ── Init ──────────────────────────────────────────────────────────────────────
 loadPage('overview');

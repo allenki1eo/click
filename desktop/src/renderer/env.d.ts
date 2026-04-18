@@ -100,6 +100,10 @@ declare global {
       getProxyUrl: () => Promise<string>
       setProxyUrl: (url: string) => Promise<void>
 
+      // Org ID (white-labeling)
+      getOrgId: () => Promise<string>
+      setOrgId: (id: string) => Promise<void>
+
       // Voice transcription
       transcribeAudio: (b64: string) => Promise<string>
 

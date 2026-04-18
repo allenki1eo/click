@@ -55,6 +55,10 @@ export const IPC = {
   GET_PROXY_URL:  'proxy:get-url',
   SET_PROXY_URL:  'proxy:set-url',
 
+  // Org ID for white-labeling (renderer ↔ main)
+  GET_ORG_ID:     'org:get-id',
+  SET_ORG_ID:     'org:set-id',
+
   // Voice transcription (renderer → main → proxy AssemblyAI)
   TRANSCRIBE_AUDIO: 'transcribe:audio',
 

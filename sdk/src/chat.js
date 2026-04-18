@@ -1,7 +1,7 @@
 /**
  * Chat service — SSE streaming to the Mwongozo proxy.
- * Parses [GUIDE:type=query:description] tags from AI responses
- * and fires callbacks so the highlighter can act on them.
+ * Sends page context + user auth context so the AI can give
+ * page-aware, role-personalised answers.
  */
 
 const GUIDE_RE = /\[GUIDE:([^\]]+)\]/g;
@@ -10,22 +10,26 @@ const MAX_HISTORY = 10;
 
 export class ChatService {
   constructor(proxyUrl, orgId) {
-    this.proxyUrl = proxyUrl.replace(/\/$/, '');
-    this.orgId = orgId;
-    this.history = this._loadHistory();
+    this.proxyUrl   = proxyUrl.replace(/\/$/, '');
+    this.orgId      = orgId;
+    this.history    = this._loadHistory();
     this.controller = null;
   }
 
-  // Stream a user message; callbacks fired as data arrives
-  async stream(userText, pageContext, { onChunk, onDone, onGuide, onError }) {
-    // Abort any in-flight request
+  /**
+   * @param {string} userText
+   * @param {object|null} pageContext  — from context.js
+   * @param {object|null} userContext  — from auth.js (role, name, branch…)
+   * @param {{ onChunk, onDone, onGuide, onError }} callbacks
+   */
+  async stream(userText, pageContext, userContext, { onChunk, onDone, onGuide, onError }) {
     if (this.controller) this.controller.abort();
     this.controller = new AbortController();
 
-    const userMsg = { role: 'user', content: buildUserContent(userText, pageContext) };
-    const messages = [...this.history, userMsg];
-
-    let fullText = '';
+    const userMsg   = { role: 'user', content: _buildContent(userText, pageContext, userContext) };
+    const messages  = [...this.history, userMsg];
+    let fullText    = '';
+    let seenGuides  = new Set();
 
     try {
       const resp = await fetch(`${this.proxyUrl}/chat`, {
@@ -33,24 +37,22 @@ export class ChatService {
         headers: {
           'Content-Type': 'application/json',
           'X-Org-Id': this.orgId,
+          ...(userContext?.role ? { 'X-User-Role': userContext.role } : {}),
         },
         body: JSON.stringify({
           messages,
-          model: 'anthropic/claude-3-haiku',
-          stream: true,
+          model:      'anthropic/claude-3-haiku',
+          stream:     true,
           max_tokens: 1000,
         }),
         signal: this.controller.signal,
       });
 
-      if (!resp.ok) {
-        const err = await resp.text();
-        throw new Error(`Proxy error ${resp.status}: ${err}`);
-      }
+      if (!resp.ok) throw new Error(`Proxy ${resp.status}: ${await resp.text()}`);
 
-      const reader = resp.body.getReader();
+      const reader  = resp.body.getReader();
       const decoder = new TextDecoder();
-      let buffer = '';
+      let buffer    = '';
 
       while (true) {
         const { done, value } = await reader.read();
@@ -58,7 +60,7 @@ export class ChatService {
 
         buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split('\n');
-        buffer = lines.pop(); // keep incomplete last line
+        buffer = lines.pop();
 
         for (const line of lines) {
           if (!line.startsWith('data: ')) continue;
@@ -66,33 +68,33 @@ export class ChatService {
           if (data === '[DONE]') continue;
 
           try {
-            const parsed = JSON.parse(data);
-            const delta = parsed.choices?.[0]?.delta?.content;
+            const delta = JSON.parse(data).choices?.[0]?.delta?.content;
             if (!delta) continue;
 
             fullText += delta;
             onChunk?.(delta, fullText);
 
-            // Fire guide callbacks as tags appear in the stream
-            let match;
-            const searchIn = fullText;
+            // Fire each GUIDE tag exactly once as it appears
             GUIDE_RE.lastIndex = 0;
-            while ((match = GUIDE_RE.exec(searchIn)) !== null) {
-              const tag = match[1]; // e.g. "text=Submit:Click to submit"
-              const colonIdx = tag.lastIndexOf(':');
+            let m;
+            while ((m = GUIDE_RE.exec(fullText)) !== null) {
+              if (seenGuides.has(m[0])) continue;
+              seenGuides.add(m[0]);
+              const colonIdx = m[1].lastIndexOf(':');
               if (colonIdx < 0) continue;
-              const query = tag.slice(0, colonIdx);
-              const description = tag.slice(colonIdx + 1);
-              onGuide?.({ query, description, raw: match[0] });
+              onGuide?.({
+                query:       m[1].slice(0, colonIdx),
+                description: m[1].slice(colonIdx + 1),
+                raw:         m[0],
+              });
             }
-          } catch (_) { /* malformed SSE chunk */ }
+          } catch (_) {}
         }
       }
 
-      // Save to history
       const cleanText = fullText.replace(GUIDE_RE, '').trim();
-      this.history.push({ role: 'user', content: userText });
-      this.history.push({ role: 'assistant', content: cleanText });
+      this.history.push({ role: 'user',      content: userText   });
+      this.history.push({ role: 'assistant', content: cleanText  });
       if (this.history.length > MAX_HISTORY * 2) {
         this.history = this.history.slice(-MAX_HISTORY * 2);
       }
@@ -112,29 +114,41 @@ export class ChatService {
   }
 
   _loadHistory() {
-    try {
-      return JSON.parse(localStorage.getItem(HISTORY_KEY(this.orgId)) || '[]');
-    } catch (_) { return []; }
+    try { return JSON.parse(localStorage.getItem(HISTORY_KEY(this.orgId)) || '[]'); }
+    catch (_) { return []; }
   }
 
   _saveHistory() {
-    try {
-      localStorage.setItem(HISTORY_KEY(this.orgId), JSON.stringify(this.history));
-    } catch (_) { /* storage quota */ }
+    try { localStorage.setItem(HISTORY_KEY(this.orgId), JSON.stringify(this.history)); }
+    catch (_) {}
   }
 }
 
-function buildUserContent(text, ctx) {
-  if (!ctx) return text;
+function _buildContent(text, ctx, user) {
   const parts = [`User question: ${text}`];
-  if (ctx.url) parts.push(`Current page: ${ctx.url}`);
-  if (ctx.pageHeading) parts.push(`Page heading: ${ctx.pageHeading}`);
-  if (ctx.breadcrumb) parts.push(`Breadcrumb: ${ctx.breadcrumb}`);
-  if (ctx.errors?.length) parts.push(`Errors visible: ${ctx.errors.join('; ')}`);
-  if (ctx.formFields?.length) {
-    const ff = ctx.formFields.map(f => `${f.label}(${f.type})`).join(', ');
-    parts.push(`Form fields on page: ${ff}`);
+
+  // Auth / role context
+  if (user) {
+    const lines = [];
+    if (user.role)       lines.push(`Role: ${user.role}`);
+    if (user.name)       lines.push(`Name: ${user.name}`);
+    if (user.department) lines.push(`Department: ${user.department}`);
+    if (user.branch)     lines.push(`Branch: ${user.branch}`);
+    if (lines.length)    parts.push(`User context: ${lines.join(', ')}`);
   }
-  if (ctx.visibleText) parts.push(`Visible text: ${ctx.visibleText.slice(0, 500)}`);
+
+  // Page context
+  if (ctx) {
+    if (ctx.url)          parts.push(`Current page: ${ctx.url}`);
+    if (ctx.pageHeading)  parts.push(`Page heading: ${ctx.pageHeading}`);
+    if (ctx.breadcrumb)   parts.push(`Breadcrumb: ${ctx.breadcrumb}`);
+    if (ctx.errors?.length)
+      parts.push(`Errors visible: ${ctx.errors.join('; ')}`);
+    if (ctx.formFields?.length)
+      parts.push(`Form fields: ${ctx.formFields.map(f => `${f.label}(${f.type})`).join(', ')}`);
+    if (ctx.visibleText)
+      parts.push(`Visible text: ${ctx.visibleText.slice(0, 500)}`);
+  }
+
   return parts.join('\n');
 }

@@ -18,7 +18,7 @@ import { HotkeyManager } from './hotkey'
 import { TrayManager } from './tray'
 import { createOverlayWindow, resizeOverlayToScreen } from './overlay'
 import { IPC } from '../shared/ipc'
-import { getOrbConfig, setOrbConfig, getProxyUrl, setProxyUrl } from './config'
+import { getOrbConfig, setOrbConfig, getProxyUrl, setProxyUrl, getOrgId, setOrgId } from './config'
 import type { OrbConfig } from '../shared/types'
 
 const PRELOAD = join(__dirname, '../preload/index.js')
@@ -197,6 +197,10 @@ app.whenReady().then(() => {
   // Proxy URL IPC
   ipcMain.handle(IPC.GET_PROXY_URL, () => getProxyUrl())
   ipcMain.handle(IPC.SET_PROXY_URL, (_, url: string) => setProxyUrl(url))
+
+  // Org ID (white-labeling)
+  ipcMain.handle(IPC.GET_ORG_ID, () => getOrgId())
+  ipcMain.handle(IPC.SET_ORG_ID, (_, id: string) => setOrgId(id))
 
   // Voice transcription — receive base64 audio from renderer, forward to proxy
   ipcMain.handle(IPC.TRANSCRIBE_AUDIO, async (_, b64: string): Promise<string> => {
