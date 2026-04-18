@@ -75,10 +75,10 @@ async function handleChat(request: Request, env: Env): Promise<Response> {
 
   // Route to appropriate provider based on model
   if (model.includes('glm') || model.includes('bigmodel')) {
-    // BigModel.cn (Zhipu AI) - GLM series
     return await handleBigModelChat(body, env)
+  } else if (model.startsWith('claude-') && env.ANTHROPIC_API_KEY) {
+    return await handleAnthropicChat(body, env)
   } else {
-    // OpenRouter - default
     return await handleOpenRouterChat(body, env)
   }
 }
@@ -115,6 +115,95 @@ async function handleOpenRouterChat(body: string, env: Env): Promise<Response> {
       'content-type': 'text/event-stream',
       'cache-control': 'no-cache',
     },
+  })
+}
+
+// Converts OpenAI-style image_url blocks to Anthropic native image source format
+function toAnthropicMessages(messages: any[]): any[] {
+  return messages.map((m) => {
+    if (!Array.isArray(m.content)) return m
+    return {
+      ...m,
+      content: m.content.map((block: any) => {
+        if (block.type === 'image_url') {
+          const url = block.image_url?.url ?? ''
+          const b64 = url.includes(',') ? url.split(',')[1] : url
+          const mediaType = url.startsWith('data:') ? url.slice(5, url.indexOf(';')) : 'image/jpeg'
+          return { type: 'image', source: { type: 'base64', media_type: mediaType, data: b64 } }
+        }
+        return block
+      }),
+    }
+  })
+}
+
+async function handleAnthropicChat(body: string, env: Env): Promise<Response> {
+  const parsed = JSON.parse(body)
+
+  const anthropicBody = JSON.stringify({
+    model:      parsed.model || 'claude-sonnet-4-6',
+    max_tokens: parsed.max_tokens ?? 1200,
+    stream:     true,
+    messages:   toAnthropicMessages(parsed.messages || []),
+  })
+
+  console.log(`[Anthropic] model=${parsed.model || 'claude-sonnet-4-6'}`)
+
+  const upstream = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'x-api-key':         env.ANTHROPIC_API_KEY!,
+      'anthropic-version': '2023-06-01',
+      'content-type':      'application/json',
+    },
+    body: anthropicBody,
+  })
+
+  if (!upstream.ok) {
+    const err = await upstream.text()
+    console.error('[Anthropic] upstream error', upstream.status, err)
+    return ok(err, { status: upstream.status, headers: { 'content-type': 'application/json' } })
+  }
+
+  // Transform Anthropic SSE → OpenAI SSE so the client reader needs no changes
+  const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>()
+  const writer  = writable.getWriter()
+  const encoder = new TextEncoder()
+  const decoder = new TextDecoder()
+
+  ;(async () => {
+    const reader = upstream.body!.getReader()
+    let buf = ''
+    try {
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buf += decoder.decode(value, { stream: true })
+        const lines = buf.split('\n')
+        buf = lines.pop() ?? ''
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue
+          const raw = line.slice(6).trim()
+          if (!raw) continue
+          try {
+            const evt = JSON.parse(raw)
+            if (evt.type === 'content_block_delta' && evt.delta?.type === 'text_delta') {
+              const chunk = { choices: [{ delta: { content: evt.delta.text } }] }
+              await writer.write(encoder.encode(`data: ${JSON.stringify(chunk)}\n\n`))
+            } else if (evt.type === 'message_stop') {
+              await writer.write(encoder.encode('data: [DONE]\n\n'))
+            }
+          } catch { /* skip malformed lines */ }
+        }
+      }
+    } finally {
+      await writer.close().catch(() => {})
+    }
+  })()
+
+  return new Response(readable, {
+    status: 200,
+    headers: { ...CORS, 'content-type': 'text/event-stream', 'cache-control': 'no-cache' },
   })
 }
 
