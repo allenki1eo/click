@@ -390,7 +390,7 @@ async function handleAnthropicChat(parsed, res, origin, org) {
   });
 
   const anthropicBody = JSON.stringify({
-    model:      parsed.model || 'claude-haiku-4-5-20251001',
+    model:      parsed.model || 'claude-sonnet-4-6',
     max_tokens: parsed.max_tokens ?? 1200,
     stream:     true,
     messages:   convertMessages(parsed.messages || []),
