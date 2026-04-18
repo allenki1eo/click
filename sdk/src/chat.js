@@ -4,7 +4,7 @@
  * page-aware, role-personalised answers.
  */
 
-const GUIDE_RE = /\[GUIDE:([^\]]+)\]/g;
+const GUIDE_PATTERN = /\[GUIDE:([^\]]+)\]/g;
 const HISTORY_KEY = (orgId) => `mwz_history_${orgId}`;
 const MAX_HISTORY = 10;
 
@@ -74,10 +74,10 @@ export class ChatService {
             fullText += delta;
             onChunk?.(delta, fullText);
 
-            // Fire each GUIDE tag exactly once as it appears
-            GUIDE_RE.lastIndex = 0;
+            // Fire each GUIDE tag exactly once as it appears (fresh regex each time to avoid shared lastIndex)
+            const guideRe = new RegExp(GUIDE_PATTERN.source, 'g');
             let m;
-            while ((m = GUIDE_RE.exec(fullText)) !== null) {
+            while ((m = guideRe.exec(fullText)) !== null) {
               if (seenGuides.has(m[0])) continue;
               seenGuides.add(m[0]);
               const colonIdx = m[1].lastIndexOf(':');
@@ -92,7 +92,7 @@ export class ChatService {
         }
       }
 
-      const cleanText = fullText.replace(GUIDE_RE, '').trim();
+      const cleanText = fullText.replace(new RegExp(GUIDE_PATTERN.source, 'g'), '').trim();
       this.history.push({ role: 'user',      content: userText   });
       this.history.push({ role: 'assistant', content: cleanText  });
       if (this.history.length > MAX_HISTORY * 2) {

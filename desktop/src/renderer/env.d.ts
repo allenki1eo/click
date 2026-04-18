@@ -108,7 +108,8 @@ declare global {
       transcribeAudio: (b64: string) => Promise<string>
 
       // Persistent conversation history
-      getHistory: () => Promise<Message[]>
+      getHistory:   () => Promise<Message[]>
+      clearHistory: () => Promise<void>
     }
   }
 }

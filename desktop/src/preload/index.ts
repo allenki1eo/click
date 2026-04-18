@@ -77,7 +77,8 @@ const api = {
   transcribeAudio: (b64: string): Promise<string> => ipcRenderer.invoke(IPC.TRANSCRIBE_AUDIO, b64),
 
   // Persistent conversation history
-  getHistory: (): Promise<Message[]> => ipcRenderer.invoke(IPC.HISTORY_GET),
+  getHistory:   (): Promise<Message[]> => ipcRenderer.invoke(IPC.HISTORY_GET),
+  clearHistory: (): Promise<void>      => ipcRenderer.invoke(IPC.HISTORY_CLEAR),
 }
 
 contextBridge.exposeInMainWorld('api', api)

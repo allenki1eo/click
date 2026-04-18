@@ -182,4 +182,15 @@ export class MwongozoWidget {
     if (!this.__sid) this.__sid = `${Date.now()}-${Math.random().toString(36).slice(2,7)}`;
     return this.__sid;
   }
+
+  destroy() {
+    this._chat.controller?.abort();
+    this._audio.stopRecording?.().catch(() => {});
+    this._hl.clearAll();
+    this._orb.destroy();
+    this._panel.destroy?.();
+    clearTimeout(this._guideTimer);
+    this._guideTimer = null;
+    if (window.mwongozo === this) delete window.mwongozo;
+  }
 }
